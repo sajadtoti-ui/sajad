@@ -5,6 +5,9 @@ on:
   push:
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -49,9 +52,23 @@ jobs:
         continue-on-error: true
 
       - name: بناء APK
-        run: flutter build apk --release
+        run: |
+          flutter build apk --release
+          cp build/app/outputs/flutter-apk/app-release.apk build/app/outputs/flutter-apk/muqabala.apk
 
       - uses: actions/upload-artifact@v4
         with:
           name: muqabala-apk
           path: muqabala_flutter/build/app/outputs/flutter-apk/app-release.apk
+
+      - name: نشر الـAPK كإصدار للتنزيل المباشر
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest-apk
+          name: مقابلة – آخر نسخة APK
+          make_latest: true
+          body: |
+            آخر نسخة تجريبية من تطبيق «مقابلة».
+            نزّل ملف muqabala.apk من الأسفل وافتحه بالتلفون حتى يتنصّب.
+            حسابات التجربة (كلمة المرور 123456): موظف 07701111111، شركة 07900000000، موارد بشرية 07000000000.
+          files: muqabala_flutter/build/app/outputs/flutter-apk/muqabala.apk

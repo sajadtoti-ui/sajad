@@ -33,7 +33,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
           Expanded(child: Text(label, style: const TextStyle(fontWeight: FontWeight.w700))),
           const Pill('إلزامي', kind: PillKind.bad),
         ]),
-        if (file != null) Row(children: [Expanded(child: Text('📄 $file')), const Pill('✓ انرفعت', kind: PillKind.ok)]),
+        if (file != null)
+          Row(children: [
+            DocThumb(doc: Doc(title: label, path: file), size: 56),
+            const SizedBox(width: 10),
+            const Pill('✓ انرفعت', kind: PillKind.ok),
+          ]),
         Padding(
           padding: const EdgeInsets.only(top: 6),
           child: FilledButton.tonalIcon(
@@ -41,7 +46,7 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
             label: Text(file == null ? 'تصوير البطاقة' : 'تغيير'),
             onPressed: () async {
               final f = await shootDocument();
-              if (f != null && mounted) setState(() => onPicked(f));
+              if (f != null && mounted) setState(() => onPicked(f.$2));
             },
           ),
         ),

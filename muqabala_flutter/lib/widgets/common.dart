@@ -1,9 +1,13 @@
 // عناصر واجهة مشتركة بين كل الشاشات
 import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:pdfrx/pdfrx.dart';
 
 import '../data/models.dart';
 import '../data/store.dart';
@@ -257,23 +261,122 @@ Future<String?> pickPhoto() async {
   return base64Encode(await x.readAsBytes());
 }
 
-/// صورة مستمسك بالكاميرا الخلفية، يرجع اسم الملف
-Future<String?> shootDocument() async {
-  final x = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1400, imageQuality: 80);
-  return x?.name;
+/// يحفظ نسخة من الملف داخل مجلد التطبيق، ويرجع مكانها
+Future<String> saveDocBytes(Uint8List bytes, String name) async {
+  final dir = Directory('${(await getApplicationDocumentsDirectory()).path}/docs');
+  if (!dir.existsSync()) dir.createSync(recursive: true);
+  final safe = name.replaceAll(RegExp(r'[^\w\.\-؀-ۿ]'), '_');
+  final f = File('${dir.path}/${now()}_$safe');
+  await f.writeAsBytes(bytes);
+  return f.path;
 }
 
-/// مستند (صورة أو PDF) بحد أقصى 5 ميغا. يرجع (اسم الملف، رسالة خطأ)
-Future<(String?, String?)> pickDocument() async {
+/// صورة مستمسك بالكاميرا الخلفية. يرجع (اسم الملف، مكانه)
+Future<(String, String)?> shootDocument() async {
+  final x = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 85);
+  if (x == null) return null;
+  return (x.name, await saveDocBytes(await x.readAsBytes(), x.name));
+}
+
+/// مستند (صورة أو PDF) بحد أقصى 5 ميغا. يرجع (اسم الملف، مكانه، رسالة خطأ)
+Future<(String?, String?, String?)> pickDocument() async {
   final files = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
   );
-  if (files.isEmpty) return (null, null);
+  if (files.isEmpty) return (null, null, null);
   final f = files.first;
   final size = await f.length() ?? 0;
-  if (size > 5 * 1024 * 1024) return (null, '⚠️ الملف أكبر من 5 ميغا');
-  return (f.name, null);
+  if (size > 5 * 1024 * 1024) return (null, null, '⚠️ الملف أكبر من 5 ميغا');
+  final bytes = await f.readAsBytes();
+  return (f.name, await saveDocBytes(bytes, f.name), null);
+}
+
+/// يفتح المستند: الصورة بتكبير وتصغير، والـPDF بعارض داخل التطبيق
+void openDoc(BuildContext context, Doc d) {
+  Navigator.push(context, MaterialPageRoute(builder: (_) => DocViewer(doc: d)));
+}
+
+class DocViewer extends StatelessWidget {
+  final Doc doc;
+  const DocViewer({super.key, required this.doc});
+  @override
+  Widget build(BuildContext context) {
+    final p = doc.path;
+    final exists = p != null && File(p).existsSync();
+    Widget body;
+    if (!exists) {
+      body = const Center(
+        child: Padding(
+          padding: EdgeInsets.all(24),
+          child: Text('📄 هذا مستند تجريبي بدون ملف حقيقي.\nالمستندات اللي ترفعها من التطبيق تنفتح هنا.',
+              textAlign: TextAlign.center, style: TextStyle(fontSize: 16, color: C.mut)),
+        ),
+      );
+    } else if (doc.isPdf) {
+      body = PdfViewer.file(p);
+    } else {
+      body = InteractiveViewer(minScale: 1, maxScale: 6, child: Center(child: Image.file(File(p))));
+    }
+    return Scaffold(
+      backgroundColor: exists && !doc.isPdf ? Colors.black : null,
+      appBar: AppBar(title: Text(doc.title, overflow: TextOverflow.ellipsis)),
+      body: SafeArea(child: body),
+    );
+  }
+}
+
+/// صورة مصغرة للمستند، تنفتح بالضغط
+class DocThumb extends StatelessWidget {
+  final Doc doc;
+  final double size;
+  const DocThumb({super.key, required this.doc, this.size = 64});
+  @override
+  Widget build(BuildContext context) {
+    final p = doc.path;
+    final img = p != null && !doc.isPdf && File(p).existsSync();
+    return InkWell(
+      onTap: () => openDoc(context, doc),
+      borderRadius: BorderRadius.circular(10),
+      child: Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          color: C.soft,
+          border: Border.all(color: C.line),
+          borderRadius: BorderRadius.circular(10),
+          image: img ? DecorationImage(image: FileImage(File(p)), fit: BoxFit.cover) : null,
+        ),
+        alignment: Alignment.center,
+        child: img ? null : Text(doc.isPdf ? 'PDF' : '📄', style: const TextStyle(fontWeight: FontWeight.w800, color: C.pri2)),
+      ),
+    );
+  }
+}
+
+/// سطر مستند: صورة مصغرة + الاسم + الحالة + زر عرض
+class DocTile extends StatelessWidget {
+  final String label;
+  final Doc doc;
+  final List<Widget> actions;
+  const DocTile({super.key, required this.label, required this.doc, this.actions = const []});
+  @override
+  Widget build(BuildContext context) => Item(children: [
+        Row(children: [
+          DocThumb(doc: doc, size: 56),
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text(label, style: const TextStyle(fontSize: 13, color: C.mut)),
+              Text(doc.title, style: const TextStyle(fontWeight: FontWeight.w700)),
+              Pill(docLabel(doc.status), kind: docKind(doc.status)),
+            ]),
+          ),
+          TextButton(onPressed: () => openDoc(context, doc), child: const Text('👁️ عرض')),
+        ]),
+        if (doc.status == 'rejected' && doc.note.isNotEmpty) Mut('سبب الرفض: ${doc.note}'),
+        ...actions,
+      ]);
 }
 
 /// زر بعرض كامل

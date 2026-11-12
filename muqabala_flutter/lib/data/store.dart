@@ -3,6 +3,7 @@
 // بنفس الدوال، فالشاشات ما تحتاج تتغير.
 
 import 'dart:convert';
+import 'dart:io';
 import 'dart:math' as math;
 
 import 'package:flutter/foundation.dart';
@@ -795,9 +796,10 @@ class AppState extends ChangeNotifier {
     changed();
   }
 
-  void verifyDoc(Worker w, Doc d, bool ok) {
+  void verifyDoc(Worker w, Doc d, bool ok, [String note = '']) {
     d.status = ok ? 'verified' : 'rejected';
-    log('${ok ? '✅ توثيق ' : '❌ رفض '}${d.title} – ${w.name}');
+    d.note = ok ? '' : note.trim();
+    log('${ok ? '✅ توثيق ' : '❌ رفض '}${d.title} – ${w.name}${d.note.isNotEmpty ? ' (السبب: ${d.note})' : ''}');
     changed();
   }
 
@@ -810,6 +812,14 @@ class AppState extends ChangeNotifier {
 
   void verifyCo(Company c, bool ok) {
     c.selfie = null;
+    // صور البطاقة تنحذف من التلفون بعد التوثيق
+    for (final p in [c.idFront, c.idBack]) {
+      if (p != null) {
+        try {
+          File(p).deleteSync();
+        } catch (_) {}
+      }
+    }
     c.idFront = null;
     c.idBack = null;
     c.verified = ok;

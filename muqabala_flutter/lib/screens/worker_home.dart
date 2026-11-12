@@ -112,13 +112,7 @@ class _WorkerHomeState extends State<WorkerHome> {
         ]),
       Box(title: '📎 مستنداتي', children: [
         if (docs.isEmpty) const Mut('ما رفعت مستندات بعد.'),
-        for (final (k, doc) in docs)
-          Item(children: [
-            Row(children: [
-              Expanded(child: Text('$k: ${doc.title}')),
-              Pill(docLabel(doc.status), kind: docKind(doc.status)),
-            ]),
-          ]),
+        for (final (k, doc) in docs) DocTile(label: k, doc: doc),
         if (w.union == null) const Mut('💡 ارفع هوية نقابتك (اختياري) حتى تاخذ علامة «✅ موثّق» وتزيد ثقة الشركات بيك.'),
       ]),
       Box(title: '✍️ عنّي', children: [

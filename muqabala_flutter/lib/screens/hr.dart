@@ -86,8 +86,11 @@ class _HrScreenState extends State<HrScreen> {
             Row(children: [
               _img(c.selfie, 'الصورة الحية'),
               const SizedBox(width: 10),
-              Expanded(child: Mut('🪪 ${c.idFront}\n🪪 ${c.idBack}\nقارن الوجه بصورة البطاقة')),
+              if (c.idFront != null) Column(children: [DocThumb(doc: Doc(title: 'البطاقة: الوجه', path: c.idFront), size: 84), const Mut('وجه البطاقة')]),
+              const SizedBox(width: 10),
+              if (c.idBack != null) Column(children: [DocThumb(doc: Doc(title: 'البطاقة: الظهر', path: c.idBack), size: 84), const Mut('ظهر البطاقة')]),
             ]),
+            const Mut('اضغط على أي صورة حتى تكبّرها، وقارن الوجه بصورة البطاقة والاسم بالمسؤول.'),
             _row2('✅ توثيق الشركة', () => app.verifyCo(c, true), 'رفض', () => app.verifyCo(c, false)),
           ]),
         const Mut('🗑️ صور البطاقة والصورة الحية تنحذف بعد التوثيق.'),
@@ -110,10 +113,9 @@ class _HrScreenState extends State<HrScreen> {
       Box(title: '📎 مستندات بانتظار التوثيق (${docs.length})', children: [
         if (docs.isEmpty) const Mut('ماكو مستندات تنتظر 👌'),
         for (final (w, k, d) in docs)
-          Item(children: [
-            Text(w.name, style: const TextStyle(fontWeight: FontWeight.w700)),
-            Mut('$k: ${d.title} · 📄 ${d.file ?? ''}'),
-            _row2('✅ توثيق', () => app.verifyDoc(w, d, true), 'رفض', () => app.verifyDoc(w, d, false)),
+          DocTile(label: '${w.name} · $k', doc: d, actions: [
+            const Mut('افتح المستند وتأكد إن الاسم مطابق، والجهة والتخصص صحيحين، وما بيه تعديل أو قص.'),
+            _row2('✅ توثيق', () => app.verifyDoc(w, d, true), 'رفض', () => _reject(w, d)),
           ]),
         const Mut('توثيق هوية النقابة يعطي العامل علامة «✅ موثّق». بالنسخة الحقيقية صور الهويات تنحذف بعد التحقق.'),
       ]),
@@ -185,6 +187,33 @@ class _HrScreenState extends State<HrScreen> {
       ),
       const SizedBox(height: 20),
     ]);
+  }
+
+  /// رفض مستند ويه سبب يوصل للموظف
+  Future<void> _reject(Worker w, Doc d) async {
+    final ctl = TextEditingController();
+    final reason = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('رفض: ${d.title}'),
+        content: Column(mainAxisSize: MainAxisSize.min, children: [
+          Wrap(spacing: 6, children: [
+            for (final r in ['الصورة غير واضحة', 'الاسم غير مطابق', 'المستند ناقص', 'يبين معدّل'])
+              ActionChip(label: Text(r), onPressed: () => ctl.text = r),
+          ]),
+          const SizedBox(height: 8),
+          TextField(controller: ctl, decoration: const InputDecoration(labelText: 'سبب الرفض (يوصل للموظف)')),
+        ]),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('إلغاء')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, ctl.text), child: const Text('رفض')),
+        ],
+      ),
+    );
+    ctl.dispose();
+    if (reason == null) return;
+    app.verifyDoc(w, d, false, reason);
+    if (mounted) toast(context, 'تم الرفض، ووصل السبب للموظف');
   }
 
   Widget _stat(String n, String l) => Expanded(child: Column(children: [Big(n), Mut(l)]));

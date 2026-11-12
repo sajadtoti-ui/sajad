@@ -12,13 +12,17 @@ int? _int(dynamic v) => v == null ? null : (v as num).toInt();
 /// مستند مرفوع: شهادة دراسية، هوية نقابة، أو شهادة إضافية
 class Doc {
   String title;
-  String? file;
+  String? file; // اسم الملف الأصلي
+  String? path; // مكان النسخة المحفوظة على التلفون (بالسيرفر: رابط مقفول)
   String status; // pending | verified | rejected
-  Doc({required this.title, this.file, this.status = 'pending'});
-  Json toJson() => {'title': title, 'file': file, 'status': status};
-  factory Doc.fromJson(Json j) =>
-      Doc(title: j['title'] ?? '', file: j['file'], status: j['status'] ?? 'pending');
-  Doc copy() => Doc(title: title, file: file, status: status);
+  String note; // سبب الرفض من الموارد البشرية
+  Doc({required this.title, this.file, this.path, this.status = 'pending', this.note = ''});
+  bool get isPdf => (file ?? path ?? '').toLowerCase().endsWith('.pdf');
+  Json toJson() => {'title': title, 'file': file, 'path': path, 'status': status, 'note': note};
+  factory Doc.fromJson(Json j) => Doc(
+      title: j['title'] ?? '', file: j['file'], path: j['path'],
+      status: j['status'] ?? 'pending', note: j['note'] ?? '');
+  Doc copy() => Doc(title: title, file: file, path: path, status: status, note: note);
 }
 
 /// تخصص الموظف ونتيجة امتحانه

@@ -213,13 +213,7 @@ class _InterviewScreenState extends State<InterviewScreen> {
           ),
         ]),
         Wrap(children: badges(w)),
-        for (final d in [w.degree, w.union, ...w.certs].whereType<Doc>())
-          Item(children: [
-            Row(children: [
-              Expanded(child: Text('📄 ${d.title}')),
-              Pill(docLabel(d.status), kind: docKind(d.status)),
-            ]),
-          ]),
+        for (final d in [w.degree, w.union, ...w.certs].whereType<Doc>()) DocTile(label: '📎 مستند', doc: d),
         if (w.degree == null && w.union == null && w.certs.isEmpty) const Mut('ما رفع مستندات.'),
       ]);
 

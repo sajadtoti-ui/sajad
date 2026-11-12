@@ -28,7 +28,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String _sector = kSectors.keys.first;
   String _spec = '';
   String _lang = kLangs.first, _level = kLevels.first;
-  String? _certFile;
+  String? _certFile, _certPath;
 
   @override
   void dispose() {
@@ -58,17 +58,18 @@ class _RegisterScreenState extends State<RegisterScreen> {
   }
 
   Future<void> _pickDoc(String kind) async {
-    final (name, err) = await pickDocument();
+    final (name, path, err) = await pickDocument();
     if (!mounted) return;
     if (err != null) return toast(context, err);
     if (name == null) return;
     setState(() {
       if (kind == 'degree') {
-        d.degree = Doc(title: _deg.text.trim().isEmpty ? 'الشهادة الدراسية' : _deg.text.trim(), file: name);
+        d.degree = Doc(title: _deg.text.trim().isEmpty ? 'الشهادة الدراسية' : _deg.text.trim(), file: name, path: path);
       } else if (kind == 'union') {
-        d.union = Doc(title: _union.text.trim().isEmpty ? 'هوية النقابة' : _union.text.trim(), file: name);
+        d.union = Doc(title: _union.text.trim().isEmpty ? 'هوية النقابة' : _union.text.trim(), file: name, path: path);
       } else {
         _certFile = name;
+        _certPath = path;
       }
     });
     if (kind != 'extra') toast(context, '✓ انرفع الملف، ينتظر مراجعة الموارد البشرية');
@@ -79,8 +80,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (t.length < 3) return toast(context, 'اكتب اسم الشهادة');
     if (_certFile == null) return toast(context, 'ارفع صورة الشهادة أو PDF');
     setState(() {
-      d.certs.add(Doc(title: t, file: _certFile));
+      d.certs.add(Doc(title: t, file: _certFile, path: _certPath));
       _certFile = null;
+      _certPath = null;
       _cert.clear();
     });
   }
@@ -108,7 +110,9 @@ class _RegisterScreenState extends State<RegisterScreen> {
           padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
           decoration: BoxDecoration(border: Border.all(color: const Color(0xFFCFD8DE)), borderRadius: BorderRadius.circular(10)),
           child: Row(children: [
-            Expanded(child: Text('📄 ${doc!.file}', overflow: TextOverflow.ellipsis)),
+            DocThumb(doc: doc!, size: 44),
+            const SizedBox(width: 8),
+            Expanded(child: Text(doc.file ?? '', overflow: TextOverflow.ellipsis)),
             Pill(docLabel(doc.status), kind: docKind(doc.status)),
             IconButton(icon: const Icon(Icons.close, color: C.bad), onPressed: onRemove),
           ]),
@@ -266,7 +270,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
             Pill('اختيارية'),
           ]),
           const Mut('كورسات، شهادات سلامة، دورات… تكدر ترفع أكثر من وحدة.'),
-          for (var i = 0; i < d.certs.length; i++) _fileRow(Doc(title: d.certs[i].title, file: '${d.certs[i].title} · ${d.certs[i].file ?? ''}', status: d.certs[i].status), () => setState(() => d.certs.removeAt(i))),
+          for (var i = 0; i < d.certs.length; i++) _fileRow(Doc(title: d.certs[i].title, file: '${d.certs[i].title} · ${d.certs[i].file ?? ''}', path: d.certs[i].path, status: d.certs[i].status), () => setState(() => d.certs.removeAt(i))),
           const SizedBox(height: 6),
           TextField(controller: _cert, decoration: const InputDecoration(hintText: 'اسم الشهادة، مثال: HAZWOPER 40')),
           Row(children: [

@@ -265,13 +265,14 @@ Future<String?> shootDocument() async {
 
 /// مستند (صورة أو PDF) بحد أقصى 5 ميغا. يرجع (اسم الملف، رسالة خطأ)
 Future<(String?, String?)> pickDocument() async {
-  final r = await FilePicker.platform.pickFiles(
+  final files = await FilePicker.pickFiles(
     type: FileType.custom,
     allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
   );
-  if (r == null || r.files.isEmpty) return (null, null);
-  final f = r.files.single;
-  if (f.size > 5 * 1024 * 1024) return (null, '⚠️ الملف أكبر من 5 ميغا');
+  if (files.isEmpty) return (null, null);
+  final f = files.first;
+  final size = await f.length() ?? 0;
+  if (size > 5 * 1024 * 1024) return (null, '⚠️ الملف أكبر من 5 ميغا');
   return (f.name, null);
 }
 

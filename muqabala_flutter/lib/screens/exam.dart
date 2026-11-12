@@ -57,6 +57,8 @@ class _ExamScreenState extends State<ExamScreen> {
       return;
     }
     e.answers.add((q.topic, ok));
+    e.secs.add(30 - _left);
+    if (j < 0) e.timeouts++;
     e.k++;
     if (e.done) {
       _finish();
@@ -119,7 +121,7 @@ class _ExamScreenState extends State<ExamScreen> {
     return ListView(padding: const EdgeInsets.all(14), children: [
       Box(title: '✅ خلص الاختبار', children: [
         Text(_title, style: const TextStyle(fontWeight: FontWeight.w700)),
-        const Note('🤖 الذكاء الاصطناعي حسب تقييمك الأولي وأرسله لقسم الموارد البشرية للمراجعة. يوصلك إشعار لما تخلص المراجعة.'),
+        const Note('🤖 الذكاء الاصطناعي حلّل إجاباتك حسب كل محور (نقاط القوة والضعف والوقت) وأرسل التقييم للموارد البشرية. يوصلك إشعار لما تعتمد درجتك.'),
         const Note('🔒 الذكاء الاصطناعي استلم إجاباتك بس، بدون اسمك أو رقمك.', kind: NoteKind.lock),
         if (nextLang >= 0)
           Item(children: [
@@ -150,12 +152,27 @@ class _ExamScreenState extends State<ExamScreen> {
           if (timed) Text('⏱️ $_left ث', style: const TextStyle(fontWeight: FontWeight.w800, color: C.warn)),
         ]),
         const SizedBox(height: 8),
-        LinearProgressIndicator(value: e.k / e.qs.length, minHeight: 6, borderRadius: BorderRadius.circular(9)),
+        TweenAnimationBuilder<double>(
+          tween: Tween(end: e.k / e.qs.length),
+          duration: const Duration(milliseconds: 350),
+          builder: (_, v, __) => LinearProgressIndicator(value: v, minHeight: 6, borderRadius: BorderRadius.circular(9)),
+        ),
+        if (timed) ...[
+          const SizedBox(height: 4),
+          LinearProgressIndicator(value: _left / 30, minHeight: 3, color: _left <= 10 ? C.bad : C.amber, backgroundColor: C.line),
+        ],
         const SizedBox(height: 6),
         label,
         Mut('سؤال ${e.k + 1} من ${e.qs.length}${q.topic.isNotEmpty ? ' · ${q.topic}' : ''}'),
         const SizedBox(height: 8),
-        Text(q.q, style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
+        AnimatedSwitcher(
+          duration: const Duration(milliseconds: 260),
+          transitionBuilder: (c, a) => FadeTransition(
+            opacity: a,
+            child: SlideTransition(position: Tween(begin: const Offset(.08, 0), end: Offset.zero).animate(a), child: c),
+          ),
+          child: Text(q.q, key: ValueKey(e.k), style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
+        ),
         if (q.img != null)
           Container(
             margin: const EdgeInsets.symmetric(vertical: 8),
@@ -185,10 +202,10 @@ class _ExamScreenState extends State<ExamScreen> {
     }
     return Padding(
       padding: const EdgeInsets.symmetric(vertical: 4),
-      child: InkWell(
+      child: Press(
         onTap: () => _answer(j),
-        borderRadius: BorderRadius.circular(10),
-        child: Container(
+        child: AnimatedContainer(
+          duration: const Duration(milliseconds: 220),
           width: double.infinity,
           constraints: const BoxConstraints(minHeight: 48),
           padding: const EdgeInsets.all(12),

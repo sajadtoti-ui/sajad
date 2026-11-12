@@ -13,6 +13,12 @@ import 'constants.dart';
 import 'models.dart';
 
 int now() => DateTime.now().millisecondsSinceEpoch;
+
+String _dt(int t) {
+  final d = DateTime.fromMillisecondsSinceEpoch(t);
+  final mm = d.minute.toString().padLeft(2, '0');
+  return '${d.day}/${d.month} ${d.hour}:$mm';
+}
 const int kDay = 86400000;
 
 /// بصمة بسيطة لكلمة المرور للتجربة فقط. السيرفر الحقيقي يستخدم bcrypt.
@@ -42,6 +48,8 @@ class ExamSession {
   final bool generic;
   int k = 0;
   final List<(String, bool)> answers = [];
+  final List<int> secs = []; // الوقت اللي أخذه كل سؤال
+  int timeouts = 0;
   ExamSession(this.kind, this.index, this.qs, {this.generic = false});
   int get correct => answers.where((a) => a.$2).length;
   bool get done => k >= qs.length;
@@ -58,10 +66,58 @@ class WorkerDraft {
   bool hidePhoto = false;
   String about = '';
   bool edit = false;
+
+  /// المسودة تنحفظ على التلفون حتى ما تضيع إذا طلع من التطبيق أو صار خطأ
+  Json toJson() => {
+        'name': name, 'gender': gender, 'age': age, 'transport': transport, 'gov': gov,
+        'qadha': qadha, 'qadhaOther': qadhaOther, 'area': area, 'areaOther': areaOther,
+        'degree': degree?.toJson(), 'union': union?.toJson(),
+        'certs': certs.map((e) => e.toJson()).toList(),
+        'langs': langs.map((e) => e.toJson()).toList(),
+        'specs': specs.map((e) => e.toJson()).toList(),
+        'photo': photo, 'selfie': selfie, 'hidePhoto': hidePhoto, 'about': about,
+      };
+
+  static WorkerDraft fromJson(Json j) {
+    List<T> l<T>(String k, T Function(Json) f) =>
+        (j[k] as List? ?? []).map((e) => f(Map<String, dynamic>.from(e as Map))).toList();
+    Doc? doc(String k) => j[k] == null ? null : Doc.fromJson(Map<String, dynamic>.from(j[k] as Map));
+    return WorkerDraft()
+      ..name = j['name'] ?? ''
+      ..gender = j['gender'] ?? ''
+      ..age = j['age'] ?? ''
+      ..transport = j['transport'] ?? ''
+      ..gov = j['gov'] ?? 'بغداد'
+      ..qadha = j['qadha'] ?? ''
+      ..qadhaOther = j['qadhaOther'] ?? ''
+      ..area = j['area'] ?? ''
+      ..areaOther = j['areaOther'] ?? ''
+      ..degree = doc('degree')
+      ..union = doc('union')
+      ..certs = l('certs', Doc.fromJson)
+      ..langs = l('langs', Lang.fromJson)
+      ..specs = l('specs', Spec.fromJson)
+      ..photo = j['photo']
+      ..selfie = j['selfie']
+      ..hidePhoto = j['hidePhoto'] == true
+      ..about = j['about'] ?? '';
+  }
 }
 
+/// أقسام لوحة الموارد البشرية وصلاحية كل دور
+const Map<String, String> kHrRoles = {
+  'admin': 'مدير (كل الصلاحيات)',
+  'reviewer': 'مراجع (امتحانات ومستندات وتوثيق)',
+  'support': 'دعم (رسائل وبلاغات ومحادثات)',
+};
+const Map<String, List<String>> kHrAccess = {
+  'reviewer': ['exams', 'langs', 'companies', 'selfies', 'docs', 'areas', 'specs', 'profiles', 'bank', 'stats'],
+  'support': ['support', 'reports', 'chats', 'alerts', 'profiles', 'stats'],
+};
+
 class AppState extends ChangeNotifier {
-  static const _key = 'muqabala_v6';
+  static const _key = 'muqabala_v7';
+  static const _draftKey = 'muqabala_reg_draft';
   final _rnd = math.Random();
 
   List<Account> accounts = [];
@@ -71,6 +127,10 @@ class AppState extends ChangeNotifier {
   List<Post> posts = [];
   List<LogEntry> logs = [];
   List<LogEntry> alerts = [];
+  List<LogEntry> access = []; // سجل وصول الموارد البشرية للمحادثات والملفات
+  List<Notif> notifs = [];
+  List<Ticket> tickets = [];
+  String? pending2fa; // حساب موارد بشرية ينتظر رمز التحقق بخطوتين
   List<OtherSpec> others = [];
   List<NewArea> newAreas = [];
   Map<String, List<String>> custom = {};
@@ -97,6 +157,7 @@ class AppState extends ChangeNotifier {
       _seed();
     }
     _buildGeo();
+    expireOld();
     notifyListeners();
   }
 
@@ -118,6 +179,9 @@ class AppState extends ChangeNotifier {
         'posts': posts.map((e) => e.toJson()).toList(),
         'logs': logs.map((e) => e.toJson()).toList(),
         'alerts': alerts.map((e) => e.toJson()).toList(),
+        'access': access.map((e) => e.toJson()).toList(),
+        'notifs': notifs.map((e) => e.toJson()).toList(),
+        'tickets': tickets.map((e) => e.toJson()).toList(),
         'others': others.map((e) => e.toJson()).toList(),
         'newAreas': newAreas.map((e) => e.toJson()).toList(),
         'custom': custom,
@@ -135,6 +199,9 @@ class AppState extends ChangeNotifier {
     posts = l('posts', Post.fromJson);
     logs = l('logs', LogEntry.fromJson);
     alerts = l('alerts', LogEntry.fromJson);
+    access = l('access', LogEntry.fromJson);
+    notifs = l('notifs', Notif.fromJson);
+    tickets = l('tickets', Ticket.fromJson);
     others = l('others', OtherSpec.fromJson);
     newAreas = l('newAreas', NewArea.fromJson);
     custom = (j['custom'] as Map? ?? {})
@@ -171,15 +238,43 @@ class AppState extends ChangeNotifier {
 
   void log(String m) {
     logs.insert(0, LogEntry(now(), m));
-    if (logs.length > 80) logs = logs.sublist(0, 80);
+    if (logs.length > 200) logs = logs.sublist(0, 200);
   }
+
+  /// إشعار لصاحب الرقم
+  void notify(String? phone, String text, {String? reqId}) {
+    if (phone == null) return;
+    notifs.insert(0, Notif(to: phone, text: text, t: now(), reqId: reqId));
+    if (notifs.length > 300) notifs = notifs.sublist(0, 300);
+  }
+
+  List<Notif> get myNotifs => notifs.where((n) => n.to == session).toList();
+  int get unread => notifs.where((n) => n.to == session && !n.read).length;
+  void readAll() {
+    for (final n in notifs.where((n) => n.to == session)) {
+      n.read = true;
+    }
+    changed();
+  }
+
+  String? phoneOfCompany(String name) {
+    final c = companyByName(name);
+    if (c == null) return null;
+    return accounts.where((a) => a.role == 'company' && a.ref == c.id).firstOrNull?.phone;
+  }
+
+  String? phoneOfWorker(String wid) => workers.where((w) => w.id == wid).firstOrNull?.phone;
 
   // ───────────── البيانات التجريبية ─────────────
   void _seed() {
-    Doc d(String t, String s) => Doc(title: t, file: '${t.replaceAll(' ', '_')}.jpg', status: s);
+    var ago = 40; // كل عنصر يدخل بوقت مختلف حتى يبين الترتيب من الأقدم للأحدث
+    Doc d(String t, String s) =>
+        Doc(title: t, file: '${t.replaceAll(' ', '_')}.jpg', status: s, at: now() - (ago--) * 3600000);
     Spec sp(String spec, int years, String status, int exam, int? fin) => Spec(
         spec: spec, sector: sectorOf(spec), years: years, status: status,
-        examScore: exam, finalScore: fin, attempts: [now() - 20 * kDay]);
+        examScore: exam, finalScore: fin, attempts: [now() - 20 * kDay],
+        since: now() - (ago--) * 3600000, avgSec: 12,
+        reviewedAt: status == 'reviewed' ? now() - 15 * kDay : null);
     Worker mk(String id, String name, String phone, String g, int age, String t, String gov,
         String q, String a,
         {Doc? deg, Doc? un, List<Doc>? certs, List<Lang>? langs, required List<Spec> specs,
@@ -191,6 +286,16 @@ class AppState extends ChangeNotifier {
           lastUpdate: now() - 10 * kDay, createdAt: now() - 30 * kDay);
       for (final s in w.specs) {
         s.aiScore = total(s.examScore ?? 0, s.years, docCount(w));
+        if (s.status == 'pending') {
+          s.aiNote = (s.examScore ?? 0) >= 70
+              ? 'أداء جيد بأغلب المحاور، يُنصح بالاعتماد.'
+              : 'ضعف بأكثر من محور، يُنصح بسؤال عملي بالمقابلة.';
+          s.weak = (s.examScore ?? 0) >= 70 ? [] : ['السلامة'];
+          s.strong = ['الأساسيات'];
+        }
+      }
+      for (final l in w.langs) {
+        l.since = now() - (ago--) * 3600000;
       }
       return w;
     }
@@ -229,12 +334,34 @@ class AppState extends ChangeNotifier {
     accounts = [
       for (final w in workers) Account(phone: w.phone, pass: pass, role: 'worker', ref: w.id),
       Account(phone: '07900000000', pass: pass, role: 'company', ref: 'c1'),
-      Account(phone: '07000000000', pass: pass, role: 'hr'),
+      Account(phone: '07000000000', pass: pass, role: 'hr', hrRole: 'admin', hrName: 'سجاد (مدير)'),
+      Account(phone: '07000000001', pass: pass, role: 'hr', hrRole: 'reviewer', hrName: 'مراجع 1'),
+      Account(phone: '07000000002', pass: pass, role: 'hr', hrRole: 'support', hrName: 'دعم 1'),
     ];
     companies = [
       Company(id: 'c1', name: 'شركة النور للمقاولات', sector: 'البناء والتشطيب', gov: 'بغداد',
-          contact: 'م. أحمد', verified: true),
+          contact: 'م. أحمد', verified: true, createdAt: now() - 40 * kDay, assistant: 'ghina'),
     ];
+    // ثلاث طلبات تجريبية: محادثة جارية، وتوظيف قبل 31 يوم (للتقييم بعد 30 يوم)، وطلب مهمل ينتهي تلقائياً
+    final w2 = workers[1], w3 = workers[2], w6 = workers[5];
+    w2.ratings = [Rating(company: 'شركة النور للمقاولات', kind: 'interview', stars: 5, note: 'فاهم شغله', t: now() - 33 * kDay)];
+    requests = [
+      Req(id: 'r1', wid: w2.id, company: 'شركة النور للمقاولات', spec: 'فني مولدات', hours: '8 ساعات – صباحي',
+          stage: 'hired', createdAt: now() - 40 * kDay, stageAt: now() - 31 * kDay, hiredAt: now() - 31 * kDay,
+          rated: true, videoDone: true, inOk: true,
+          msgs: [Msg('co', 'هلا، شوكت يناسبك تبدي؟', now() - 32 * kDay), Msg('w', 'من الأحد إن شاء الله', now() - 32 * kDay)]),
+      Req(id: 'r2', wid: w3.id, company: 'شركة النور للمقاولات', spec: 'محاسب عام', hours: '8 ساعات – صباحي',
+          stage: 'schedule', createdAt: now() - 2 * kDay, stageAt: now() - kDay,
+          msgs: [Msg('co', 'أهلاً زهراء، عندچ خبرة ببرنامج الأمين؟', now() - kDay), Msg('w', 'نعم، 3 سنوات', now() - 20 * 3600000)]),
+      Req(id: 'r3', wid: w6.id, company: 'شركة النور للمقاولات', spec: 'مطور ويب', hours: 'دوام جزئي',
+          stage: 'sent', createdAt: now() - 8 * kDay, stageAt: now() - 8 * kDay),
+    ];
+    tickets = [
+      Ticket(id: 't1', phone: w6.phone, who: w6.name, t: now() - 26 * 3600000,
+          text: 'رفعت شهادة الدورة من يومين وبعدها قيد المراجعة، شوكت تخلص؟'),
+    ];
+    notifs = [];
+    access = [];
     posts = [
       Post(id: 'p1', wid: 'w2', t: now() - 2 * kDay,
           text: 'نصيحة: قبل الصيف بدّلوا فلتر الهواء والزيت للمولدات، أغلب العطلات بالحر تجي من الإهمال.',
@@ -242,13 +369,13 @@ class AppState extends ChangeNotifier {
       Post(id: 'p2', wid: 'w3', t: now() - 5 * 3600000,
           text: 'أحد يعرف كورس مجاني للإكسل المتقدم؟ أريد أطور نفسي بالجداول المحورية.'),
     ];
-    requests = [];
     alerts = [];
     others = [];
     newAreas = [];
     custom = {};
     customGeo = {};
     session = null;
+    pending2fa = null;
     logs = [LogEntry(now(), 'تم إنشاء بيانات تجريبية')];
   }
 
@@ -380,9 +507,55 @@ class AppState extends ChangeNotifier {
       return 'الرقم أو كلمة المرور غير صحيحة';
     }
     _fails = 0;
+    if (a.role == 'hr') {
+      // الموارد البشرية: تحقق بخطوتين (رمز على واتساب الموظف)
+      pending2fa = a.phone;
+      changed();
+      return null;
+    }
     session = a.phone;
+    _onLogin();
     changed();
     return null;
+  }
+
+  /// الخطوة الثانية لدخول الموارد البشرية. للتجربة الرمز 4321
+  String? verify2fa(String code) {
+    if (pending2fa == null) return 'ارجع سجّل دخول من جديد';
+    if (code.trim() != '4321') {
+      _fails++;
+      if (_fails >= 5) {
+        pending2fa = null;
+        _fails = 0;
+        _lockUntil = now() + 60000;
+        log('🛡️ 5 رموز غلط بالتحقق بخطوتين، انقفل الدخول دقيقة');
+        changed();
+        return '🛡️ رموز غلط كثيرة. انتظر دقيقة وسجّل دخول من جديد';
+      }
+      return 'الرمز غلط. تأكد من آخر رسالة وصلتك على واتساب';
+    }
+    _fails = 0;
+    session = pending2fa;
+    pending2fa = null;
+    log('🔐 دخول موارد بشرية: ${acct?.hrName ?? ''} (تحقق بخطوتين)');
+    changed();
+    return null;
+  }
+
+  void cancel2fa() {
+    pending2fa = null;
+    changed();
+  }
+
+  /// تذكيرات تلقائية وقت الدخول: تحديث الملف وأسئلة الأسبوع
+  void _onLogin() {
+    final w = me;
+    if (w == null) return;
+    bool sentToday(String key) => notifs.any((n) => n.to == w.phone && n.text.contains(key) && now() - n.t < kDay);
+    if (stale(w) && !sentToday('حدّث')) notify(w.phone, '⏰ صار أكثر من 3 أشهر ما حدّثت ملفك. حدّثه حتى تبقى بأعلى البحث');
+    if (w.weekDone != weekId && !sentToday('أسئلة الأسبوع')) {
+      notify(w.phone, '📝 أسئلة الأسبوع نزلت! جاوب واكسب نقاط ترفع ترتيبك');
+    }
   }
 
   bool phoneTaken(String phone) => accounts.any((a) => a.phone == phone);
@@ -390,13 +563,294 @@ class AppState extends ChangeNotifier {
   void signup(String phone, String pass, String role) {
     accounts.add(Account(phone: phone, pass: hashPass(pass), role: role));
     session = phone;
-    log('🆕 حساب جديد (${role == 'worker' ? 'باحث عن عمل' : 'شركة'})');
+    log('🆕 حساب جديد (${role == 'worker' ? 'باحث عن عمل' : 'شركة'}) · وافق على الشروط وسياسة الخصوصية');
+    notify(phone, '👋 أهلاً بيك بمقابلة! كمّل ملفك حتى توصلك أفضل الفرص');
     changed();
   }
 
   void logout() {
     session = null;
+    pending2fa = null;
     changed();
+  }
+
+  /// حذف الحساب وكل بياناته من التطبيق (شرط Google Play)
+  void deleteAccount() {
+    final a = acct;
+    if (a == null) return;
+    if (a.role == 'worker' && a.ref != null) {
+      final w = workers.where((x) => x.id == a.ref).firstOrNull;
+      if (w != null) {
+        for (final d in [w.degree, w.union, ...w.certs].whereType<Doc>()) {
+          _deleteFile(d.path);
+        }
+        workers.remove(w);
+        requests.removeWhere((r) => r.wid == w.id);
+        posts.removeWhere((p) => p.wid == w.id);
+        for (final p in posts) {
+          p.comments.removeWhere((c) => c.wid == w.id);
+        }
+      }
+    } else if (a.role == 'company' && a.ref != null) {
+      final c = companies.where((x) => x.id == a.ref).firstOrNull;
+      if (c != null) {
+        _deleteFile(c.idFront);
+        _deleteFile(c.idBack);
+        companies.remove(c);
+        requests.removeWhere((r) => r.company == c.name);
+      }
+    }
+    notifs.removeWhere((n) => n.to == a.phone);
+    tickets.removeWhere((t) => t.phone == a.phone);
+    accounts.remove(a);
+    session = null;
+    log('🗑️ مستخدم حذف حسابه وكل بياناته');
+    changed();
+  }
+
+  void _deleteFile(String? p) {
+    if (p == null) return;
+    try {
+      File(p).deleteSync();
+    } catch (_) {}
+  }
+
+  // ───────────── مسودة التسجيل ─────────────
+  Future<void> saveRegDraft(WorkerDraft d) async {
+    if (d.edit) return;
+    final p = await SharedPreferences.getInstance();
+    await p.setString('$_draftKey:$session', jsonEncode(d.toJson()));
+  }
+
+  Future<WorkerDraft?> loadRegDraft() async {
+    final p = await SharedPreferences.getInstance();
+    final raw = p.getString('$_draftKey:$session');
+    if (raw == null) return null;
+    try {
+      return WorkerDraft.fromJson(Map<String, dynamic>.from(jsonDecode(raw) as Map));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> clearRegDraft() async {
+    final p = await SharedPreferences.getInstance();
+    await p.remove('$_draftKey:$session');
+  }
+
+  // ───────────── اكتمال الملف ─────────────
+  /// نسبة اكتمال ملف الموظف، وأهم خطوة جاية ترفعها
+  (int, String?) completeness(Worker w) {
+    final items = <(bool, int, String)>[
+      (w.idVerified || w.selfie != null, 15, 'خذ صورة حية للتحقق'),
+      (w.specs.any((s) => s.status != 'new'), 20, 'سوّي امتحان تخصصك'),
+      (w.degree != null, 15, 'ارفع شهادتك الدراسية'),
+      (w.about.trim().length >= 30, 10, 'اكتب سطرين عن نفسك بـ«عرّف بنفسك»'),
+      (w.photo != null, 10, 'ارفع صورة شخصية'),
+      (w.certs.isNotEmpty, 10, 'ارفع شهادة دورة أو كورس'),
+      (w.union != null, 10, 'ارفع هوية النقابة'),
+      (w.langs.isNotEmpty, 10, 'أضف لغة وامتحنها'),
+    ];
+    var pct = 0;
+    (bool, int, String)? next;
+    for (final it in items) {
+      if (it.$1) {
+        pct += it.$2;
+      } else if (next == null || it.$2 > next.$2) {
+        next = it;
+      }
+    }
+    return (pct, next == null ? null : '${next.$3} (+${next.$2}%)');
+  }
+
+  // ───────────── المساعد غنى ويمان ─────────────
+  /// للموظف: غنى للذكور ويمان للإناث. للشركة: اللي تختاره ('' = لسه ما اختارت)
+  String get assistant {
+    final a = acct;
+    if (a == null) return 'ghina';
+    if (a.role == 'company') return comp?.assistant ?? '';
+    return me?.gender == 'أنثى' ? 'yaman' : 'ghina';
+  }
+
+  void setAssistant(String who) {
+    final c = comp;
+    if (c == null) return;
+    c.assistant = who;
+    changed();
+  }
+
+  // ───────────── الدعم «كلّم شخص» ─────────────
+  String get myName {
+    final a = acct;
+    if (a == null) return '';
+    if (a.role == 'company') return comp?.name ?? 'شركة جديدة';
+    if (a.role == 'hr') return a.hrName;
+    return me?.name ?? 'مستخدم جديد';
+  }
+
+  String? sendTicket(String text) {
+    final t = text.trim();
+    if (t.length < 5) return 'اكتب مشكلتك بجملة وحدة على الأقل';
+    tickets.add(Ticket(id: 't${now()}', phone: session!, who: myName, text: t, t: now()));
+    log('🆘 رسالة دعم جديدة من $myName');
+    changed();
+    return null;
+  }
+
+  List<Ticket> get myTickets => tickets.where((t) => t.phone == session).toList()..sort((a, b) => b.t.compareTo(a.t));
+
+  void replyTicket(Ticket t, String reply) {
+    t.reply = reply.trim();
+    t.replyT = now();
+    t.replyBy = acct?.hrName ?? '';
+    notify(t.phone, '💬 فريق مقابلة رد على رسالتك: ${t.reply}');
+    log('💬 رد على رسالة دعم: ${t.who}');
+    changed();
+  }
+
+  // ───────────── صلاحيات الموارد البشرية ─────────────
+  bool can(String section) {
+    final a = acct;
+    if (a == null || a.role != 'hr') return false;
+    if (a.hrRole == 'admin') return true;
+    return kHrAccess[a.hrRole]?.contains(section) ?? false;
+  }
+
+  void _access(String what) {
+    access.insert(0, LogEntry(now(), '${acct?.hrName ?? 'موارد بشرية'} · $what'));
+    if (access.length > 300) access = access.sublist(0, 300);
+  }
+
+  /// فتح محادثة من الموارد البشرية: ينسجل بالسجل ويوصل إشعار للطرفين
+  void hrOpenChat(Req r) {
+    final w = workers.where((x) => x.id == r.wid).firstOrNull;
+    _access('فتح محادثة ${r.company} ↔ ${w?.name ?? '—'}');
+    const msg = '🛡️ إدارة مقابلة راجعت محادثتك لحمايتك (حسب شروط الاستخدام)';
+    notify(w?.phone, msg, reqId: r.id);
+    notify(phoneOfCompany(r.company), msg, reqId: r.id);
+    changed();
+  }
+
+  void hrOpenProfile(String who) {
+    _access('فتح ملف $who');
+    changed();
+  }
+
+  /// تعديل درجة حتى بعد الاعتماد
+  void hrEditScore(Worker w, int i, int score, String note) {
+    final s = w.specs[i];
+    final old = s.finalScore;
+    s.finalScore = score.clamp(0, 100);
+    s.status = 'reviewed';
+    s.reviewedAt = now();
+    if (note.trim().isNotEmpty) s.hrNote = note.trim();
+    _access('تعديل درجة ${w.name} – ${s.spec}: ${old ?? '—'} ← ${s.finalScore}');
+    log('✏️ إعادة تقييم ${w.name} – ${s.spec}: ${old ?? '—'} ← ${s.finalScore}');
+    notify(w.phone, '📊 الموارد البشرية حدّثت تقييمك بـ${s.spec}: ${s.finalScore}/100');
+    changed();
+  }
+
+  String? addHr(String phone, String name, String role) {
+    if (!RegExp(r'^07\d{9}$').hasMatch(phone.trim())) return 'اكتب رقم عراقي صحيح يبدأ بـ 07 ومن 11 رقم';
+    if (name.trim().length < 2) return 'اكتب اسم الموظف';
+    if (phoneTaken(phone.trim())) return 'هذا الرقم عنده حساب';
+    accounts.add(Account(phone: phone.trim(), pass: hashPass('123456'), role: 'hr', hrRole: role, hrName: name.trim()));
+    log('👤 إضافة موظف موارد بشرية: ${name.trim()} (${kHrRoles[role]})');
+    changed();
+    return null;
+  }
+
+  void setHrRole(Account a, String role) {
+    a.hrRole = role;
+    log('👤 تغيير صلاحية ${a.hrName} إلى ${kHrRoles[role]}');
+    changed();
+  }
+
+  // ───────────── انتهاء الطلبات تلقائياً ─────────────
+  static const int kExpireDays = 7;
+
+  /// كم يوم باقي قبل ما ينتهي الطلب (null إذا ما ينتهي)
+  int? daysLeft(Req r) {
+    final waiting = r.stage == 'sent' || (r.stage == 'schedule' && r.slots.isNotEmpty && r.videoAt == null);
+    if (!waiting) return null;
+    return kExpireDays - ((now() - r.stageAt) ~/ kDay);
+  }
+
+  void expireOld() {
+    var any = false;
+    for (final r in requests) {
+      final left = daysLeft(r);
+      if (left != null && left <= 0) {
+        r.stage = 'expired';
+        r.stageAt = now();
+        any = true;
+        const t = '⌛ طلب المقابلة انتهى تلقائياً لأن ما صار رد خلال 7 أيام';
+        notify(phoneOfWorker(r.wid), '$t (${r.company})', reqId: r.id);
+        notify(phoneOfCompany(r.company), '$t (${r.spec})', reqId: r.id);
+        log('⌛ انتهاء طلب مهمل: ${r.company} – ${r.spec}');
+      }
+    }
+    if (any) _save();
+  }
+
+  void _stage(Req r, String stage) {
+    r.stage = stage;
+    r.stageAt = now();
+  }
+
+  // ───────────── تقييم الموظفين ─────────────
+  bool can30(Req r) => r.stage == 'hired' && !r.rated30 && r.hiredAt != null &&
+      (ignoreCooldown || now() - r.hiredAt! >= 30 * kDay);
+
+  void rateWorker(Req r, String kind, int stars, String note) {
+    final w = workerById(r.wid);
+    w.ratings.add(Rating(company: r.company, kind: kind, stars: stars.clamp(1, 5), note: note.trim(), t: now()));
+    if (kind == 'd30') {
+      r.rated30 = true;
+    } else {
+      r.rated = true;
+    }
+    log('⭐ ${r.company} قيّمت ${w.name}: $stars/5 (${kind == 'd30' ? 'بعد 30 يوم' : 'بعد المقابلة'})');
+    changed();
+  }
+
+  /// المرشح يبلّغ إن الشركة ما حضرت المقابلة اللي هي حددتها
+  void reportNoShow(Req r) {
+    if (r.noShow) return;
+    r.noShow = true;
+    final c = companyByName(r.company);
+    if (c != null) c.noShows++;
+    alerts.add(LogEntry(now(), 'شركة ما حضرت مقابلة حددتها: ${r.company} / ${r.spec}'));
+    log('🚫 ${r.company} ما حضرت مقابلة، نزل تقييم التزامها');
+    notify(phoneOfCompany(r.company), '⚠️ المرشح بلّغ إنكم ما حضرتوا المقابلة. تكرارها ينزّل تقييم شركتكم');
+    changed();
+  }
+
+  /// التزام الشركة من 5: ينقص نص نجمة لكل مقابلة ما حضرتها
+  double coScore(String name) {
+    final c = companyByName(name);
+    return math.max(1.0, 5.0 - (c?.noShows ?? 0) * 0.5);
+  }
+
+  // ───────────── مراجعة بنك الأسئلة ─────────────
+  /// فحص آلي لبنوك الأسئلة: جواب صح واحد، خيارات مو مكررة، وما بيه أسئلة مكررة.
+  /// بالنسخة الحقيقية الذكاء الاصطناعي يراجع صحة المحتوى نفسه وبعدها الموارد البشرية تعتمد.
+  List<(String, int, List<String>)> reviewBanks() {
+    final out = <(String, int, List<String>)>[];
+    for (final e in kQB.entries) {
+      final issues = <String>[];
+      final seen = <String>{};
+      for (final q in e.value) {
+        if (!seen.add(q.q)) issues.add('سؤال مكرر: ${q.q}');
+        if (q.correct < 0 || q.correct >= q.opts.length) issues.add('رقم الجواب الصح غلط: ${q.q}');
+        if (q.opts.toSet().length != q.opts.length) issues.add('خيارات مكررة: ${q.q}');
+        if (q.opts.length < 4) issues.add('أقل من 4 خيارات: ${q.q}');
+        if (q.topic.isEmpty) issues.add('بدون محور: ${q.q}');
+      }
+      if (e.value.length < 8) issues.add('البنك بيه ${e.value.length} أسئلة بس، الأفضل 8 أو أكثر');
+      out.add((e.key, e.value.length, issues));
+    }
+    return out;
   }
 
   // ───────────── الموظف ─────────────
@@ -447,7 +901,7 @@ class AppState extends ChangeNotifier {
     final newA = a.isNotEmpty && (newQ || !areas.contains(a));
     if ((newQ || newA) &&
         !newAreas.any((n) => n.gov == g && n.qadha == q && n.area == (newA ? a : ''))) {
-      newAreas.add(NewArea(g, q, newA ? a : ''));
+      newAreas.add(NewArea(g, q, newA ? a : '', now()));
       log('🤖 منطقة جديدة مقترحة: ${[g, q, if (newA) a].join(' ← ')}');
     }
     return (q, a);
@@ -480,7 +934,7 @@ class AppState extends ChangeNotifier {
     (q, a) = resolvePlace(d.gov, q, a);
     for (final s in d.specs.where((s) => s.other)) {
       if (!others.any((o) => o.name == s.spec)) {
-        others.add(OtherSpec(s.spec, suggestSector(s.spec)));
+        others.add(OtherSpec(s.spec, suggestSector(s.spec), now()));
         log('🤖 تخصص جديد مقترح: «${s.spec}» → ${suggestSector(s.spec)}');
       }
     }
@@ -520,6 +974,7 @@ class AppState extends ChangeNotifier {
     }
     final pend = [d.degree, d.union, ...d.certs].where((x) => x != null && x.status == 'pending');
     if (pend.isNotEmpty) log('📎 مستندات جديدة بانتظار المراجعة: ${d.name.trim()}');
+    if (!d.edit) clearRegDraft();
     changed();
   }
 
@@ -548,7 +1003,7 @@ class AppState extends ChangeNotifier {
   ExamSession startExam(int specIndex) {
     final s = me!.specs[specIndex];
     final bank = kQB[s.spec];
-    return ExamSession('spec', specIndex, _mk(bank ?? kGeneric, 5), generic: bank == null);
+    return ExamSession('spec', specIndex, _mk(bank ?? kGeneric, 8), generic: bank == null);
   }
 
   ExamSession startLang(int langIndex) =>
@@ -570,11 +1025,17 @@ class AppState extends ChangeNotifier {
     switch (e.kind) {
       case 'spec':
         final s = w.specs[e.index];
+        final prev = s.examScore;
         s.examScore = pct;
         s.aiScore = total(pct, s.years, docCount(w));
         s.status = 'pending';
+        s.since = now();
         s.attempts = [...s.attempts, now()];
-        s.weak = {for (final a in e.answers.where((a) => !a.$2)) a.$1}.toList();
+        final rep = evaluate(e, prev: s.attempts.length > 1 ? prev : null);
+        s.weak = rep.$1;
+        s.strong = rep.$2;
+        s.avgSec = rep.$3;
+        s.aiNote = rep.$4;
         s.hrNote = '';
         log('🤖 امتحان: ${w.name} – ${s.spec} – تقييم أولي ${s.aiScore}');
         changed();
@@ -583,6 +1044,7 @@ class AppState extends ChangeNotifier {
         final l = w.langs[e.index];
         l.score = pct;
         l.status = 'pending';
+        l.since = now();
         log('🌐 اختبار لغة: ${w.name} – ${l.lang} – $pct');
         changed();
         return 0;
@@ -600,6 +1062,31 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  /// التقييم الآلي للامتحان: نقاط الضعف والقوة حسب المحور، ومعدل الوقت، وملاحظات للموارد البشرية.
+  /// بالنسخة الحقيقية الذكاء الاصطناعي (Gemini) يكتب التحليل، والموارد البشرية تعتمد.
+  (List<String>, List<String>, int, String) evaluate(ExamSession e, {int? prev}) {
+    final byTopic = <String, (int, int)>{};
+    for (final (topic, ok) in e.answers) {
+      final t = topic.isEmpty ? 'عام' : topic;
+      final c = byTopic[t] ?? (0, 0);
+      byTopic[t] = (c.$1 + (ok ? 1 : 0), c.$2 + 1);
+    }
+    final weak = [for (final x in byTopic.entries) if (x.value.$1 < x.value.$2) x.key];
+    final strong = [for (final x in byTopic.entries) if (x.value.$1 == x.value.$2) x.key];
+    final avg = e.secs.isEmpty ? 0 : (e.secs.reduce((a, b) => a + b) / e.secs.length).round();
+    final pct = (e.correct / e.qs.length * 100).round();
+    final notes = <String>[
+      if (pct >= 85) 'أداء ممتاز، يُنصح بالاعتماد.'
+      else if (pct >= 60) 'أداء مقبول، يُنصح بالاعتماد ويه ملاحظة تطوير.'
+      else 'أداء ضعيف، يُنصح بسؤال عملي بالمقابلة أو إعادة الامتحان.',
+      if (weak.isNotEmpty) 'يحتاج تطوير بـ: ${weak.join('، ')}.',
+      if (avg > 0 && avg <= 4 && pct >= 80) '⚠️ سرعة إجابة عالية جداً ($avg ث للسؤال)، يستحق التأكد بالمقابلة.',
+      if (e.timeouts > 0) 'انتهى الوقت على ${e.timeouts} سؤال.',
+      if (prev != null) pct > prev ? 'تحسّن عن المحاولة السابقة ($prev% ← $pct%).' : 'ما تحسّن عن المحاولة السابقة ($prev%).',
+    ];
+    return (weak, strong, avg, notes.join(' '));
+  }
+
   // ───────────── الشركة والبحث ─────────────
   String? saveCompany(
       {required String name, required String sector, required String gov, required String contact,
@@ -608,9 +1095,10 @@ class AppState extends ChangeNotifier {
     if (contact.trim().length < 3) return 'اكتب اسم الشخص المسؤول';
     if (idFront == null || idBack == null) return 'ارفع وجه وظهر البطاقة الوطنية';
     if (selfie == null) return 'خذ صورة حية للشخص المسؤول';
+    if (companies.any((x) => x.name == name.trim())) return 'اسم الشركة مسجّل من قبل، أضف اسم الفرع أو المنطقة';
     final c = Company(
         id: 'c${now()}', name: name.trim(), sector: sector, gov: gov, contact: contact.trim(),
-        idFront: idFront, idBack: idBack, selfie: selfie);
+        idFront: idFront, idBack: idBack, selfie: selfie, createdAt: now());
     companies.add(c);
     acct!.ref = c.id;
     log('🏢 شركة جديدة بانتظار التوثيق: ${c.name}');
@@ -649,7 +1137,8 @@ class AppState extends ChangeNotifier {
     int key(SearchHit r) =>
         (r.s.status == 'reviewed' ? (r.s.finalScore ?? 0) : 0) +
         math.min<int>(r.w.points ~/ 50, 5) +
-        (r.w.union?.status == 'verified' ? 3 : 0) -
+        (r.w.union?.status == 'verified' ? 3 : 0) +
+        ((r.w.stars ?? 3) - 3).round() * 2 -
         (stale(r.w) ? 5 : 0);
     out.sort((a, b) {
       final c = key(b).compareTo(key(a));
@@ -666,28 +1155,34 @@ class AppState extends ChangeNotifier {
       .firstOrNull;
 
   Req sendReq(Worker w, SearchQuery j) {
-    final r = Req(id: 'r${now()}', wid: w.id, company: comp!.name, spec: j.spec, hours: j.hours);
+    final r = Req(id: 'r${now()}', wid: w.id, company: comp!.name, spec: j.spec, hours: j.hours,
+        createdAt: now(), stageAt: now());
     requests.add(r);
     log('📩 ${r.company} طلبت مقابلة مع ${w.name}');
+    notify(w.phone, '📩 ${r.company} تطلب مقابلة وياك لتخصص ${r.spec}. رد خلال 7 أيام', reqId: r.id);
     changed();
     return r;
   }
 
   void answerReq(Req r, bool ok) {
-    r.stage = ok ? 'schedule' : 'declined';
+    _stage(r, ok ? 'schedule' : 'declined');
+    notify(phoneOfCompany(r.company), ok ? '✅ ${me?.shortName ?? 'المرشح'} قبل طلب المقابلة. اقترح مواعيد الفيديو' : '❌ المرشح اعتذر عن مقابلة ${r.spec}', reqId: r.id);
     log('${ok ? '✅' : '❌'} ${me?.name ?? ''} ${ok ? 'قبل' : 'اعتذر عن'} مقابلة ${r.company}');
     changed();
   }
 
   void proposeSlots(Req r, List<int> t) {
     r.slots = t;
+    r.stageAt = now();
+    notify(phoneOfWorker(r.wid), '📅 ${r.company} اقترحت مواعيد لمقابلة الفيديو، اختار اللي يناسبك', reqId: r.id);
     log('📅 ${r.company} اقترحت مواعيد مقابلة فيديو');
     changed();
   }
 
   void pickSlot(Req r, int i) {
     r.videoAt = r.slots[i];
-    r.stage = 'video';
+    _stage(r, 'video');
+    notify(phoneOfCompany(r.company), '🎥 المرشح ثبّت موعد الفيديو: ${_dt(r.videoAt!)}', reqId: r.id);
     log('🎥 تحديد مقابلة فيديو');
     changed();
   }
@@ -699,7 +1194,8 @@ class AppState extends ChangeNotifier {
   }
 
   void videoResult(Req r, bool ok) {
-    r.stage = ok ? 'inperson' : 'rejected';
+    _stage(r, ok ? 'inperson' : 'rejected');
+    notify(phoneOfWorker(r.wid), ok ? '👍 نجحت بمقابلة الفيديو! الشركة راح تحدد مقابلة حضورية' : 'شكراً على وقتك. ${r.company} اختارت مرشح ثاني هالمرة', reqId: r.id);
     log(ok ? '👍 المرشح نجح بالفيديو ← مقابلة حضورية' : '👎 المرشح غير مناسب بعد الفيديو');
     changed();
   }
@@ -709,6 +1205,7 @@ class AppState extends ChangeNotifier {
     if (hasContact(place)) return '🚫 ممنوع وضع أرقام أو روابط بالعنوان';
     r.inAt = at;
     r.place = place.trim();
+    notify(phoneOfWorker(r.wid), '🤝 ${r.company} حددت مقابلة حضورية: ${_dt(at)}. أكّد حضورك', reqId: r.id);
     log('🤝 تحديد مقابلة حضورية');
     changed();
     return null;
@@ -716,11 +1213,14 @@ class AppState extends ChangeNotifier {
 
   void confirmIn(Req r) {
     r.inOk = true;
+    notify(phoneOfCompany(r.company), '✓ المرشح أكّد حضور المقابلة الحضورية', reqId: r.id);
     changed();
   }
 
   void finalResult(Req r, bool ok) {
-    r.stage = ok ? 'hired' : 'rejected';
+    _stage(r, ok ? 'hired' : 'rejected');
+    if (ok) r.hiredAt = now();
+    notify(phoneOfWorker(r.wid), ok ? '🎉 مبروك! ${r.company} قررت توظيفك' : 'شكراً على وقتك. ${r.company} اختارت مرشح ثاني هالمرة', reqId: r.id);
     log(ok ? '🎉 توظيف عبر التطبيق: ${r.company} – ${r.spec}' : 'المرشح غير مناسب بعد الحضورية');
     changed();
   }
@@ -737,6 +1237,7 @@ class AppState extends ChangeNotifier {
       return '🚫 الرسالة انحجبت: ممنوع تبادل الأرقام أو الحسابات خارج التطبيق';
     }
     r.msgs.add(Msg(isCo ? 'co' : 'w', t, now()));
+    notify(isCo ? phoneOfWorker(r.wid) : phoneOfCompany(r.company), '💬 رسالة جديدة من ${isCo ? r.company : 'المرشح'}', reqId: r.id);
     changed();
     return null;
   }
@@ -771,6 +1272,7 @@ class AppState extends ChangeNotifier {
     p.reports++;
     if (p.reports >= 2) {
       p.hidden = true;
+      p.reportedAt = now();
       log('🚩 منشور انخفى بعد بلاغين وينتظر المراجعة');
     } else {
       log('🚩 بلاغ على منشور');
@@ -784,6 +1286,8 @@ class AppState extends ChangeNotifier {
     s.finalScore = score.clamp(0, 100);
     s.status = 'reviewed';
     s.hrNote = note.trim();
+    s.reviewedAt = now();
+    notify(w.phone, '✅ انعتمد تقييمك بـ${s.spec}: ${s.finalScore}/100 (${level(s.finalScore!)})');
     log('🧑‍💼 اعتماد ${w.name} – ${s.spec}: ${s.finalScore}${s.finalScore != s.aiScore ? ' (عُدّل من ${s.aiScore})' : ''}');
     changed();
   }
@@ -792,6 +1296,7 @@ class AppState extends ChangeNotifier {
     final l = w.langs[i];
     l.score = score.clamp(0, 100);
     l.status = 'reviewed';
+    notify(w.phone, '🌐 انعتمد اختبار ${l.lang}: ${l.score}/100');
     log('🌐 اعتماد لغة ${l.lang} – ${w.name}: ${l.score}');
     changed();
   }
@@ -799,6 +1304,7 @@ class AppState extends ChangeNotifier {
   void verifyDoc(Worker w, Doc d, bool ok, [String note = '']) {
     d.status = ok ? 'verified' : 'rejected';
     d.note = ok ? '' : note.trim();
+    notify(w.phone, ok ? '✅ انوثّق مستندك: ${d.title}' : '❌ انرفض مستندك «${d.title}»${d.note.isNotEmpty ? ': ${d.note}' : ''}. ارفعه من جديد');
     log('${ok ? '✅ توثيق ' : '❌ رفض '}${d.title} – ${w.name}${d.note.isNotEmpty ? ' (السبب: ${d.note})' : ''}');
     changed();
   }
@@ -806,6 +1312,7 @@ class AppState extends ChangeNotifier {
   void verifyId(Worker w, bool ok) {
     w.selfie = null; // الصورة الحية تنحذف بعد التحقق
     w.idVerified = ok;
+    notify(w.phone, ok ? '🤳 تم التحقق من هويتك' : '❌ الصورة الحية ما انقبلت، خذ صورة جديدة بمكان مضوي');
     log('${ok ? '🤳 تحقق من هوية ' : '❌ رفض صورة حية: '}${w.name} · وانحذفت الصورة الحية');
     changed();
   }
@@ -823,6 +1330,7 @@ class AppState extends ChangeNotifier {
     c.idFront = null;
     c.idBack = null;
     c.verified = ok;
+    notify(phoneOfCompany(c.name), ok ? '✅ انوثّقت شركتكم، وصارت تطلع «شركة موثّقة» للمرشحين' : '❌ ما انقبل توثيق الشركة. تواصلوا ويانا من «كلّم شخص»');
     log('${ok ? '✅ توثيق شركة: ' : '❌ رفض توثيق شركة: '}${c.name} · وانحذفت صور المستمسكات');
     changed();
   }

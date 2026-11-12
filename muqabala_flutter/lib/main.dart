@@ -1,5 +1,5 @@
 // تطبيق «مقابلة»: يربط الباحثين عن عمل بالشركات في العراق
-// النسخة 0.6 — تحويل النموذج الأولي إلى Flutter
+// النسخة 0.7 — المساعد غنى ويمان، الإشعارات، لوحة موارد بشرية مقسمة، التقييمات، والحماية
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_svg/flutter_svg.dart';
@@ -7,7 +7,9 @@ import 'package:google_fonts/google_fonts.dart';
 
 import 'data/logo.dart';
 import 'data/store.dart';
+import 'screens/assistant.dart';
 import 'screens/auth.dart';
+import 'screens/more.dart';
 import 'screens/company.dart';
 import 'screens/hr.dart';
 import 'screens/splash.dart';
@@ -30,6 +32,10 @@ class MuqabalaApp extends StatelessWidget {
       useMaterial3: true,
       colorScheme: ColorScheme.fromSeed(seedColor: C.pri, primary: C.pri),
       scaffoldBackgroundColor: C.bg,
+      pageTransitionsTheme: const PageTransitionsTheme(builders: {
+        TargetPlatform.android: SoftTransitions(),
+        TargetPlatform.iOS: SoftTransitions(),
+      }),
     );
     return MaterialApp(
       title: 'مقابلة',
@@ -98,19 +104,22 @@ class RootScreen extends StatelessWidget {
         final a = app.acct;
         Widget body;
         String who = '';
+        var fab = false;
         if (a == null) {
           body = const AuthScreen();
         } else if (a.role == 'worker') {
           final w = app.me;
           body = w == null ? const RegisterScreen() : const WorkerHome();
+          fab = w != null;
           who = '👷 ${w?.name ?? 'باحث عن عمل جديد'}';
         } else if (a.role == 'company') {
           final c = app.comp;
           body = c == null ? const CompanyProfileScreen() : const CompanyHome();
+          fab = c != null;
           who = '🏢 ${c?.name ?? 'شركة جديدة'}';
         } else {
           body = const HrScreen();
-          who = '🧑‍💼 الموارد البشرية';
+          who = '🧑‍💼 ${a.hrName} · ${kHrRoles[a.hrRole] ?? ''}';
         }
         return Scaffold(
           appBar: AppBar(
@@ -133,13 +142,23 @@ class RootScreen extends StatelessWidget {
               ),
             ]),
             actions: [
-              if (a != null)
+              if (a != null) ...[
+                const NotifBell(),
+                IconButton(tooltip: 'الإعدادات', icon: const Icon(Icons.settings_outlined), onPressed: () => openPage(context, const SettingsScreen())),
                 IconButton(tooltip: 'خروج', icon: const Icon(Icons.logout), onPressed: app.logout),
+              ],
             ],
           ),
+          floatingActionButton: fab ? const AssistantFab() : null,
           body: SafeArea(
             child: Center(
-              child: ConstrainedBox(constraints: const BoxConstraints(maxWidth: 640), child: body),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 640),
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 350),
+                  child: KeyedSubtree(key: ValueKey('${a?.phone}|${a?.ref}|${app.pending2fa}'), child: body),
+                ),
+              ),
             ),
           ),
         );

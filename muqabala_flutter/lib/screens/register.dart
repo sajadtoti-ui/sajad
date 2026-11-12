@@ -1,4 +1,6 @@
 // تسجيل الموظف أو تعديل معلوماته
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../data/constants.dart';
@@ -29,9 +31,81 @@ class _RegisterScreenState extends State<RegisterScreen> {
   String _spec = '';
   String _lang = kLangs.first, _level = kLevels.first;
   String? _certFile, _certPath;
+  Timer? _saveTimer;
+
+  @override
+  void initState() {
+    super.initState();
+    if (d.edit) return;
+    // نرجّع المعلومات اللي كتبها قبل إذا طلع من التطبيق أو صار خطأ
+    app.loadRegDraft().then((old) {
+      if (old == null || !mounted) return;
+      super.setState(() {
+        d
+          ..name = old.name
+          ..gender = old.gender
+          ..age = old.age
+          ..transport = old.transport
+          ..gov = old.gov
+          ..qadha = old.qadha
+          ..qadhaOther = old.qadhaOther
+          ..area = old.area
+          ..areaOther = old.areaOther
+          ..degree = old.degree
+          ..union = old.union
+          ..certs = old.certs
+          ..langs = old.langs
+          ..specs = old.specs
+          ..photo = old.photo
+          ..selfie = old.selfie
+          ..hidePhoto = old.hidePhoto
+          ..about = old.about;
+        _name.text = d.name;
+        _age.text = d.age;
+        _about.text = d.about;
+        _qOther.text = d.qadhaOther;
+        _aOther.text = d.areaOther;
+        _deg.text = d.degree?.title ?? '';
+        _union.text = d.union?.title ?? '';
+      });
+      if (d.name.isNotEmpty || d.specs.isNotEmpty) toast(context, '↩️ رجّعنا المعلومات اللي كتبتها قبل، كمّل من وين ما وقفت');
+    });
+    for (final c in [_name, _age, _about, _qOther, _aOther]) {
+      c.addListener(_persist);
+    }
+  }
+
+  @override
+  void setState(VoidCallback fn) {
+    super.setState(fn);
+    _persist();
+  }
+
+  /// حفظ المسودة بعد نص ثانية من آخر تغيير
+  void _persist() {
+    if (d.edit) return;
+    _saveTimer?.cancel();
+    _saveTimer = Timer(const Duration(milliseconds: 500), () {
+      d
+        ..name = _name.text
+        ..age = _age.text.trim()
+        ..about = _about.text
+        ..qadhaOther = _qOther.text
+        ..areaOther = _aOther.text;
+      app.saveRegDraft(d);
+    });
+  }
 
   @override
   void dispose() {
+    _saveTimer?.cancel();
+    if (!d.edit && app.me == null) {
+      d
+        ..name = _name.text
+        ..age = _age.text.trim()
+        ..about = _about.text;
+      app.saveRegDraft(d);
+    }
     for (final c in [_name, _age, _about, _qOther, _aOther, _deg, _union, _cert, _years, _otherSpec]) {
       c.dispose();
     }
@@ -97,7 +171,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
     if (d.degree != null && _deg.text.trim().isNotEmpty) d.degree!.title = _deg.text.trim();
     if (d.union != null && _union.text.trim().isNotEmpty) d.union!.title = _union.text.trim();
     final err = app.validateDraft(d);
-    if (err != null) return toast(context, '⚠️ $err');
+    if (err != null) return toast(context, '⚠️ $err · معلوماتك محفوظة، صحّح هاي النقطة بس');
     app.saveDraft(d);
     toast(context, d.edit ? '✓ انحفظت التعديلات' : '✓ تمت الفلترة بنجاح. ابدأ امتحان تخصصك');
     if (d.edit) Navigator.of(context).pop();
@@ -152,7 +226,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
             else
               _upload('افتح الكاميرا وخذ سيلفي', () async {
                 final s = await takeSelfie();
-                if (s != null && mounted) setState(() => d.selfie = s);
+                if (!mounted) return;
+                if (s != null) {
+                  setState(() => d.selfie = s);
+                } else {
+                  showLastError(context);
+                }
               }, icon: Icons.camera_front),
           ]),
         // ── صورة الملف ──
@@ -164,7 +243,12 @@ class _RegisterScreenState extends State<RegisterScreen> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               _upload(d.photo == null ? 'رفع صورتك' : 'تغيير الصورة', () async {
                 final p = await pickPhoto();
-                if (p != null && mounted) setState(() => d.photo = p);
+                if (!mounted) return;
+                if (p != null) {
+                  setState(() => d.photo = p);
+                } else {
+                  showLastError(context);
+                }
               }, icon: Icons.photo_camera),
               SwitchListTile(
                 contentPadding: EdgeInsets.zero,
@@ -185,7 +269,7 @@ class _RegisterScreenState extends State<RegisterScreen> {
           Expanded(
             child: Padding(
               padding: const EdgeInsets.only(top: 10),
-              child: TextField(controller: _age, keyboardType: TextInputType.number, decoration: const InputDecoration(labelText: 'العمر')),
+              child: TextField(controller: _age, keyboardType: TextInputType.number, maxLength: 2, decoration: const InputDecoration(labelText: 'العمر (رقم بس)', hintText: 'مثال: 28', counterText: '')),
             ),
           ),
         ]),

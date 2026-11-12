@@ -46,7 +46,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
             label: Text(file == null ? 'تصوير البطاقة' : 'تغيير'),
             onPressed: () async {
               final f = await shootDocument();
-              if (f != null && mounted) setState(() => onPicked(f.$2));
+              if (!mounted) return;
+              if (f != null) {
+                setState(() => onPicked(f.$2));
+              } else {
+                showLastError(context);
+              }
             },
           ),
         ),
@@ -83,7 +88,12 @@ class _CompanyProfileScreenState extends State<CompanyProfileScreen> {
                 label: const Text('افتح الكاميرا وخذ سيلفي'),
                 onPressed: () async {
                   final s = await takeSelfie();
-                  if (s != null && mounted) setState(() => _selfie = s);
+                  if (!mounted) return;
+                  if (s != null) {
+                    setState(() => _selfie = s);
+                  } else {
+                    showLastError(context);
+                  }
                 },
               ),
             ),
@@ -135,12 +145,19 @@ class _CompanyHomeState extends State<CompanyHome> {
     if (q.area.isNotEmpty && !areas.contains(q.area)) q.area = '';
     final allSpecs = [for (final e in app.allSectors.entries) ...e.value];
 
-    return ListView(padding: const EdgeInsets.all(14), children: [
+    final rate = mine.where((r) => (r.videoDone && !r.rated && ['inperson', 'hired', 'rejected'].contains(r.stage)) || app.can30(r)).length;
+    return ListView(padding: const EdgeInsets.fromLTRB(14, 14, 14, 90), children: [
+      if (rate > 0)
+        Box(color: C.warnBg, children: [
+          Text('⭐ عندكم $rate مرشح ينتظر تقييمكم', style: const TextStyle(fontWeight: FontWeight.w700)),
+          const Mut('افتحوا المقابلة من تحت وقيّموا. التقييم يخلي البحث أدق للكل.'),
+        ]),
       if (mine.isNotEmpty)
         Box(title: '🎥 مقابلاتي (${mine.length})', children: [
           for (final r in mine)
             Item(children: [
               Text('${app.workerById(r.wid).shortName} · ${r.spec}', style: const TextStyle(fontWeight: FontWeight.w700)),
+              if (app.daysLeft(r) != null) Mut('⌛ ينتهي بعد ${app.daysLeft(r)} يوم إذا ما رد المرشح'),
               Row(children: [stageChip(r), const Spacer(), FilledButton(onPressed: () => _open(r.id), child: const Text('فتح'))]),
             ]),
         ]),
@@ -212,6 +229,7 @@ class _CompanyHomeState extends State<CompanyHome> {
         Expanded(
           child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Text('${w.shortName}  ${w.gender == 'أنثى' ? '♀' : '♂'}', style: const TextStyle(fontWeight: FontWeight.w700)),
+            if (w.stars != null) Row(children: [Stars(w.stars!, size: 14), Mut('  ${w.stars!.toStringAsFixed(1)} (${w.ratings.length})')]),
             Mut('📍 ${[w.area, w.qadha].where((e) => e.isNotEmpty).join('، ')}${h.d < 9999 ? ' · ${h.d.toStringAsFixed(1)} كم' : ''}'),
             Mut('${kTrans[w.transport] ?? ''} ${w.transport == 'لا يوجد' ? 'بدون وسيلة نقل' : w.transport} · ${w.age} سنة · ${s.years} سنة خبرة · ${app.docCount(w)} شهادة'
                 '${w.langs.isNotEmpty ? ' · ${w.langs.map((l) => l.lang + (l.status == 'reviewed' ? ' (${l.score})' : '')).join('، ')}' : ''}'),
@@ -239,7 +257,7 @@ class _CompanyHomeState extends State<CompanyHome> {
           onPressed: () {
             q.hours = _hours.text;
             app.sendReq(w, q);
-            toast(context, '✓ وصل الطلب للمرشح');
+            toast(context, '✓ وصل الطلب للمرشح، وينتهي تلقائياً إذا ما رد خلال 7 أيام');
           },
           child: const Text('طلب مقابلة'),
         ),

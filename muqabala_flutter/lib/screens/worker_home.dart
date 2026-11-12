@@ -42,11 +42,18 @@ class _WorkerHomeState extends State<WorkerHome> {
         ),
       ),
       Expanded(
-        child: switch (_tab) {
-          1 => _learn(w),
-          2 => const CommunityView(),
-          _ => _home(w),
-        },
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 280),
+          transitionBuilder: (c, a) => FadeTransition(opacity: a, child: c),
+          child: KeyedSubtree(
+            key: ValueKey(_tab),
+            child: switch (_tab) {
+              1 => _learn(w),
+              2 => const CommunityView(),
+              _ => _home(w),
+            },
+          ),
+        ),
       ),
     ]);
   }
@@ -60,7 +67,29 @@ class _WorkerHomeState extends State<WorkerHome> {
       if (w.union != null) ('🪪 هوية النقابة', w.union!),
       for (final c in w.certs) ('📜 شهادة إضافية', c),
     ];
-    return ListView(padding: const EdgeInsets.all(14), children: [
+    final (pct, next) = app.completeness(w);
+    return ListView(padding: const EdgeInsets.fromLTRB(14, 14, 14, 90), children: [
+      if (pct < 100)
+        Box(children: [
+          Row(children: [
+            const Expanded(child: Text('📋 اكتمال ملفك', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16))),
+            Text('$pct%', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 20, color: pct >= 70 ? C.ok : C.warn)),
+          ]),
+          const SizedBox(height: 8),
+          TweenAnimationBuilder<double>(
+            tween: Tween(begin: 0, end: pct / 100),
+            duration: const Duration(milliseconds: 900),
+            curve: Curves.easeOutCubic,
+            builder: (_, v, __) => LinearProgressIndicator(
+              value: v, minHeight: 10, borderRadius: BorderRadius.circular(9),
+              color: pct >= 70 ? C.ok : C.amber, backgroundColor: C.soft),
+          ),
+          if (next != null) ...[
+            const SizedBox(height: 8),
+            Text('💡 الخطوة الجاية: $next'),
+            const Mut('الملفات المكتملة تطلع أول ببحث الشركات.'),
+          ],
+        ]),
       if (app.stale(w))
         Box(color: C.warnBg, children: [
           const Text('⏰ صار أكثر من 3 أشهر ما حدّثت معلوماتك.', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -75,6 +104,8 @@ class _WorkerHomeState extends State<WorkerHome> {
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
               Text('أهلاً ${w.firstName} 👋', style: const TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
               Wrap(children: badges(w)),
+              if (w.stars != null)
+                Row(children: [Stars(w.stars!), Mut('  ${w.stars!.toStringAsFixed(1)} · تقييم ${w.ratings.length} شركة')]),
             ]),
           ),
         ]),
@@ -94,6 +125,8 @@ class _WorkerHomeState extends State<WorkerHome> {
               ]),
               Text('تطلب مقابلة لتخصص ${r.spec}'),
               Mut(r.hours),
+              if (app.daysLeft(r) != null)
+                Mut('⌛ ${r.stage == 'sent' ? 'رد' : 'اختار موعد'} خلال ${app.daysLeft(r)} يوم، وإلا ينتهي الطلب تلقائياً'),
               Row(children: [
                 stageChip(r),
                 const Spacer(),
@@ -162,6 +195,7 @@ class _WorkerHomeState extends State<WorkerHome> {
         ),
         if (s.status == 'reviewed') Big('${s.finalScore}'),
       ]),
+      if (s.status == 'reviewed' && s.strong.isNotEmpty) Mut('💪 نقاط قوتك: ${s.strong.join('، ')}'),
       if (s.status == 'reviewed' && s.weak.isNotEmpty) Note('💡 ملاحظة تطوير: راجع ${s.weak.join('، ')}'),
       if (s.hrNote.isNotEmpty) Mut('ملاحظة الموارد البشرية: ${s.hrNote}'),
       if (action != null) Padding(padding: const EdgeInsets.only(top: 8), child: action),
@@ -196,7 +230,7 @@ class _WorkerHomeState extends State<WorkerHome> {
     final wk = w.weekDone == app.weekId && !app.ignoreCooldown;
     final mo = w.courseDone == app.monthId && !app.ignoreCooldown;
     final c = kCourses[app.monthId % kCourses.length];
-    return ListView(padding: const EdgeInsets.all(14), children: [
+    return ListView(padding: const EdgeInsets.fromLTRB(14, 14, 14, 90), children: [
       Box(children: [
         const Center(child: Mut('نقاطي')),
         Center(child: Text('⭐ ${w.points}', style: const TextStyle(fontSize: 34, fontWeight: FontWeight.w800, color: C.warn))),
@@ -269,7 +303,7 @@ class _CommunityViewState extends State<CommunityView> {
     final me = app.me;
     if (me == null) return const SizedBox.shrink();
     final posts = app.posts.where((p) => !p.hidden).toList()..sort((a, b) => b.t.compareTo(a.t));
-    return ListView(padding: const EdgeInsets.all(14), children: [
+    return ListView(padding: const EdgeInsets.fromLTRB(14, 14, 14, 90), children: [
       Box(title: '💬 مجتمع «مقابلة»', children: [
         const Mut('شارك نصيحة أو سؤال بمهنتك. نشر وتعليق بس، ماكو رسائل خاصة.'),
         const SizedBox(height: 8),
@@ -366,6 +400,7 @@ class CvScreen extends StatelessWidget {
         b.writeln('• ${l.lang} — ${l.level}${l.status == 'reviewed' ? ' (اختبار «مقابلة»: ${l.score}/100)' : ''}');
       }
     }
+    if (w.stars != null) b..writeln()..writeln('⭐ تقييم الشركات بعد المقابلة: ${w.stars!.toStringAsFixed(1)}/5 (${w.ratings.length} تقييم)');
     if (app.active(w)) b..writeln()..writeln('🔥 عضو نشِط بالتعلّم والمجتمع (${w.points} نقطة)');
     b..writeln()..write('موثّق عبر تطبيق «مقابلة»');
     return b.toString();

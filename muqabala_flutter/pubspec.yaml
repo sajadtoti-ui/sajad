@@ -1,7 +1,7 @@
 name: muqabala
 description: "مقابلة: تطبيق يربط الباحثين عن عمل بالشركات في العراق"
 publish_to: 'none'
-version: 0.6.1+2
+version: 0.7.0+3
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

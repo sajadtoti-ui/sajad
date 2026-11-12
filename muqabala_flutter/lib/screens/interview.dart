@@ -33,11 +33,14 @@ class _InterviewScreenState extends State<InterviewScreen> {
   final _place = TextEditingController();
   final List<int?> _slots = [null, null, null];
   int? _inAt;
+  int _stars = 0;
+  final _rateNote = TextEditingController();
 
   @override
   void dispose() {
     _chat.dispose();
     _place.dispose();
+    _rateNote.dispose();
     super.dispose();
   }
 
@@ -52,7 +55,7 @@ class _InterviewScreenState extends State<InterviewScreen> {
         final isCo = a.role == 'company';
         final w = app.workerById(r.wid);
         final idx = kStages.indexWhere((x) => x.$1 == r.stage);
-        final chatOpen = !['sent', 'declined', 'rejected'].contains(r.stage);
+        final chatOpen = !['sent', 'declined', 'rejected', 'expired'].contains(r.stage);
         return Scaffold(
           appBar: AppBar(title: Text(isCo ? '👷 ${w.shortName}' : '🏢 ${r.company}')),
           body: SafeArea(
@@ -73,9 +76,16 @@ class _InterviewScreenState extends State<InterviewScreen> {
                           style: TextStyle(fontSize: 12, color: idx >= 0 && i <= idx ? Colors.white : C.pri2)),
                     ),
                 ]),
+                if (app.daysLeft(r) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: Pill('⌛ ينتهي الطلب تلقائياً بعد ${app.daysLeft(r)} يوم إذا ما صار رد', kind: PillKind.warn),
+                  ),
                 const SizedBox(height: 10),
                 ..._actions(r, isCo),
+                ..._noShow(r, isCo),
               ]),
+              if (isCo) ..._rating(r),
               if (isCo && chatOpen) _docsCard(w),
               if (chatOpen) _chatCard(r, isCo),
             ]),
@@ -195,10 +205,78 @@ class _InterviewScreenState extends State<InterviewScreen> {
           ],
         ];
       case 'hired':
-        return const [Note('🎉 مبروك! تم التوظيف عبر «مقابلة». بعدين نضيف تقييم الطرفين ومتابعة أول 30 يوم.')];
+        return [
+          const Note('🎉 مبروك! تم التوظيف عبر «مقابلة».'),
+          if (isCo && !r.rated30 && !app.can30(r) && r.hiredAt != null)
+            Mut('⭐ تقييم «بعد 30 يوم» ينفتح بتاريخ ${fmtDate(r.hiredAt! + 30 * kDay)}'),
+        ];
+      case 'expired':
+        return [
+          Note(isCo
+              ? '⌛ الطلب انتهى تلقائياً لأن ما صار رد خلال ${AppState.kExpireDays} أيام. تكدرون ترسلون طلب جديد من البحث.'
+              : '⌛ الطلب انتهى تلقائياً لأن ما صار رد خلال ${AppState.kExpireDays} أيام.'),
+        ];
       default:
         return const [Mut('انتهى هذا الطلب.')];
     }
+  }
+
+  /// المرشح يبلّغ إذا الشركة ما حضرت مقابلة هي حددتها
+  List<Widget> _noShow(Req r, bool isCo) {
+    if (isCo || r.noShow) {
+      return [if (!isCo && r.noShow) const Pill('🚩 بلّغت إن الشركة ما حضرت، ووصل للإدارة', kind: PillKind.bad)];
+    }
+    final at = r.stage == 'video' && !r.videoDone ? r.videoAt : (r.stage == 'inperson' && r.inOk ? r.inAt : null);
+    if (at == null || (now() < at + 3600000 && !app.ignoreCooldown)) return const [];
+    return [
+      const SizedBox(height: 6),
+      TextButton.icon(
+        icon: const Text('🚩'),
+        label: const Text('الشركة ما حضرت المقابلة'),
+        onPressed: () async {
+          final ok = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('تأكيد البلاغ'),
+              content: const Text('راح نسجّل إن الشركة ما حضرت، وينزل تقييم التزامها. متأكد؟'),
+              actions: [
+                TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('رجوع')),
+                FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('إي، بلّغ')),
+              ],
+            ),
+          );
+          if (ok == true) {
+            app.reportNoShow(r);
+            if (mounted) toast(context, '✓ وصل البلاغ للإدارة، وآسفين على وقتك');
+          }
+        },
+      ),
+      if (app.ignoreCooldown) const Mut('🧪 وضع التجربة: زر البلاغ يطلع قبل الموعد'),
+    ];
+  }
+
+  /// تقييم الشركة للمرشح: بعد المقابلة، ومرة ثانية بعد 30 يوم من التوظيف
+  List<Widget> _rating(Req r) {
+    final after = r.videoDone && !r.rated && ['inperson', 'hired', 'rejected'].contains(r.stage);
+    final d30 = app.can30(r);
+    if (!after && !d30) return const [];
+    final kind = after ? 'interview' : 'd30';
+    return [
+      Box(color: C.warnBg, title: after ? '⭐ قيّموا المرشح بعد المقابلة' : '⭐ تقييم بعد 30 يوم من التوظيف', children: [
+        Mut(after
+            ? 'تقييمكم يساعد الشركات الثانية، ويخلي البحث أدق. ما يظهر للمرشح اسم الشركة اللي قيّمت.'
+            : 'شلون كان أداء الموظف بأول شهر؟ الالتزام والمهارة والتعامل.'),
+        Center(child: StarPicker(value: _stars, onChanged: (v) => setState(() => _stars = v))),
+        TextField(controller: _rateNote, decoration: const InputDecoration(labelText: 'ملاحظة (اختياري)', hintText: 'مثال: ملتزم وفاهم شغله')),
+        WideButton('إرسال التقييم', onTap: () {
+          if (_stars == 0) return toast(context, 'اختاروا عدد النجوم أولاً');
+          app.rateWorker(r, kind, _stars, _rateNote.text);
+          setState(() => _stars = 0);
+          _rateNote.clear();
+          toast(context, '✓ شكراً، انحفظ التقييم');
+        }),
+      ]),
+    ];
   }
 
   Widget _docsCard(Worker w) => Box(title: '📎 مستندات المرشح', children: [
@@ -213,11 +291,13 @@ class _InterviewScreenState extends State<InterviewScreen> {
           ),
         ]),
         Wrap(children: badges(w)),
+        if (w.stars != null) Row(children: [Stars(w.stars!), Mut('  ${w.stars!.toStringAsFixed(1)}/5 من ${w.ratings.length} تقييم')]),
         for (final d in [w.degree, w.union, ...w.certs].whereType<Doc>()) DocTile(label: '📎 مستند', doc: d),
         if (w.degree == null && w.union == null && w.certs.isEmpty) const Mut('ما رفع مستندات.'),
       ]);
 
   Widget _chatCard(Req r, bool isCo) => Box(title: '💬 المحادثة', children: [
+        const Note('🛡️ المحادثات قابلة للمراجعة من إدارة مقابلة لحمايتك، ويوصلك إشعار إذا انفتحت.', kind: NoteKind.lock),
         if (r.msgs.isEmpty) const Mut('ماكو رسائل بعد.'),
         for (final m in r.msgs)
           Align(

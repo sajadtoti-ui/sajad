@@ -16,13 +16,15 @@ class Doc {
   String? path; // مكان النسخة المحفوظة على التلفون (بالسيرفر: رابط مقفول)
   String status; // pending | verified | rejected
   String note; // سبب الرفض من الموارد البشرية
-  Doc({required this.title, this.file, this.path, this.status = 'pending', this.note = ''});
+  int at; // وقت الرفع، حتى تنراجع المستندات من الأقدم للأحدث
+  Doc({required this.title, this.file, this.path, this.status = 'pending', this.note = '', int? at})
+      : at = at ?? DateTime.now().millisecondsSinceEpoch;
   bool get isPdf => (file ?? path ?? '').toLowerCase().endsWith('.pdf');
-  Json toJson() => {'title': title, 'file': file, 'path': path, 'status': status, 'note': note};
+  Json toJson() => {'title': title, 'file': file, 'path': path, 'status': status, 'note': note, 'at': at};
   factory Doc.fromJson(Json j) => Doc(
       title: j['title'] ?? '', file: j['file'], path: j['path'],
-      status: j['status'] ?? 'pending', note: j['note'] ?? '');
-  Doc copy() => Doc(title: title, file: file, path: path, status: status, note: note);
+      status: j['status'] ?? 'pending', note: j['note'] ?? '', at: _int(j['at']));
+  Doc copy() => Doc(title: title, file: file, path: path, status: status, note: note, at: at);
 }
 
 /// تخصص الموظف ونتيجة امتحانه
@@ -38,6 +40,11 @@ class Spec {
   List<String> weak;
   String hrNote;
   bool other; // تخصص جديد كتبه الموظف بخانة «أخرى»
+  int since; // وقت دخول الطلب لقائمة المراجعة
+  List<String> strong; // نقاط القوة من تقييم الذكاء الاصطناعي
+  int avgSec; // معدل وقت الإجابة بالثواني
+  String aiNote; // ملاحظات التقييم الآلي للموارد البشرية
+  int? reviewedAt;
   Spec({
     required this.spec,
     required this.sector,
@@ -50,12 +57,19 @@ class Spec {
     List<String>? weak,
     this.hrNote = '',
     this.other = false,
+    this.since = 0,
+    List<String>? strong,
+    this.avgSec = 0,
+    this.aiNote = '',
+    this.reviewedAt,
   })  : attempts = attempts ?? [],
-        weak = weak ?? [];
+        weak = weak ?? [],
+        strong = strong ?? [];
   Json toJson() => {
         'spec': spec, 'sector': sector, 'years': years, 'status': status,
         'examScore': examScore, 'aiScore': aiScore, 'finalScore': finalScore,
         'attempts': attempts, 'weak': weak, 'hrNote': hrNote, 'other': other,
+        'since': since, 'strong': strong, 'avgSec': avgSec, 'aiNote': aiNote, 'reviewedAt': reviewedAt,
       };
   factory Spec.fromJson(Json j) => Spec(
         spec: j['spec'], sector: j['sector'] ?? '', years: _int(j['years']) ?? 0,
@@ -63,6 +77,8 @@ class Spec {
         aiScore: _int(j['aiScore']), finalScore: _int(j['finalScore']),
         attempts: _ints(j['attempts']), weak: _strs(j['weak']),
         hrNote: j['hrNote'] ?? '', other: j['other'] == true,
+        since: _int(j['since']) ?? 0, strong: _strs(j['strong']), avgSec: _int(j['avgSec']) ?? 0,
+        aiNote: j['aiNote'] ?? '', reviewedAt: _int(j['reviewedAt']),
       );
   Spec copy() => Spec.fromJson(toJson());
 }
@@ -73,10 +89,12 @@ class Lang {
   String level;
   String status; // new | pending | reviewed
   int? score;
-  Lang({required this.lang, required this.level, this.status = 'new', this.score});
-  Json toJson() => {'lang': lang, 'level': level, 'status': status, 'score': score};
+  int since;
+  Lang({required this.lang, required this.level, this.status = 'new', this.score, this.since = 0});
+  Json toJson() => {'lang': lang, 'level': level, 'status': status, 'score': score, 'since': since};
   factory Lang.fromJson(Json j) => Lang(
-      lang: j['lang'], level: j['level'] ?? '', status: j['status'] ?? 'new', score: _int(j['score']));
+      lang: j['lang'], level: j['level'] ?? '', status: j['status'] ?? 'new', score: _int(j['score']),
+      since: _int(j['since']) ?? 0);
   Lang copy() => Lang.fromJson(toJson());
 }
 
@@ -106,6 +124,7 @@ class Worker {
   int? courseDone;
   int lastUpdate;
   int createdAt;
+  List<Rating> ratings; // تقييمات الشركات بعد المقابلة وبعد 30 يوم
 
   Worker({
     required this.id,
@@ -133,7 +152,9 @@ class Worker {
     this.courseDone,
     required this.lastUpdate,
     required this.createdAt,
-  })  : certs = certs ?? [],
+    List<Rating>? ratings,
+  })  : ratings = ratings ?? [],
+        certs = certs ?? [],
         langs = langs ?? [],
         specs = specs ?? [],
         keywords = keywords ?? [];
@@ -155,6 +176,7 @@ class Worker {
         'selfie': selfie, 'idVerified': idVerified, 'points': points,
         'weekDone': weekDone, 'courseDone': courseDone,
         'lastUpdate': lastUpdate, 'createdAt': createdAt,
+        'ratings': ratings.map((e) => e.toJson()).toList(),
       };
 
   factory Worker.fromJson(Json j) => Worker(
@@ -171,7 +193,25 @@ class Worker {
         points: _int(j['points']) ?? 0, weekDone: _int(j['weekDone']),
         courseDone: _int(j['courseDone']),
         lastUpdate: _int(j['lastUpdate']) ?? 0, createdAt: _int(j['createdAt']) ?? 0,
+        ratings: _list(j['ratings'], Rating.fromJson),
       );
+
+  double? get stars =>
+      ratings.isEmpty ? null : ratings.map((r) => r.stars).reduce((a, b) => a + b) / ratings.length;
+}
+
+/// تقييم الشركة للموظف: بعد المقابلة (interview) أو بعد 30 يوم من التوظيف (d30)
+class Rating {
+  String company;
+  String kind; // interview | d30
+  int stars; // 1–5
+  String note;
+  int t;
+  Rating({required this.company, required this.kind, required this.stars, this.note = '', required this.t});
+  Json toJson() => {'company': company, 'kind': kind, 'stars': stars, 'note': note, 't': t};
+  factory Rating.fromJson(Json j) => Rating(
+      company: j['company'] ?? '', kind: j['kind'] ?? 'interview', stars: _int(j['stars']) ?? 3,
+      note: j['note'] ?? '', t: _int(j['t']) ?? 0);
 }
 
 class Company {
@@ -184,6 +224,9 @@ class Company {
   String? idBack;
   String? selfie;
   bool verified;
+  int createdAt;
+  String assistant; // '' | ghina | yaman — مساعد الشركة اللي اختارته
+  int noShows; // مقابلات حددتها الشركة وما حضرتها
   Company({
     required this.id,
     required this.name,
@@ -194,15 +237,21 @@ class Company {
     this.idBack,
     this.selfie,
     this.verified = false,
+    this.createdAt = 0,
+    this.assistant = '',
+    this.noShows = 0,
   });
   Json toJson() => {
         'id': id, 'name': name, 'sector': sector, 'gov': gov, 'contact': contact,
         'idFront': idFront, 'idBack': idBack, 'selfie': selfie, 'verified': verified,
+        'createdAt': createdAt, 'assistant': assistant, 'noShows': noShows,
       };
   factory Company.fromJson(Json j) => Company(
         id: j['id'], name: j['name'], sector: j['sector'] ?? '', gov: j['gov'] ?? '',
         contact: j['contact'] ?? '', idFront: j['idFront'], idBack: j['idBack'],
         selfie: j['selfie'], verified: j['verified'] == true,
+        createdAt: _int(j['createdAt']) ?? 0, assistant: j['assistant'] ?? '',
+        noShows: _int(j['noShows']) ?? 0,
       );
 }
 
@@ -231,6 +280,12 @@ class Req {
   String? place;
   bool inOk;
   int warn;
+  int createdAt;
+  int stageAt; // آخر مرة تغيرت المرحلة، حتى ينتهي الطلب المهمل تلقائياً
+  int? hiredAt;
+  bool rated; // الشركة قيّمت المرشح بعد المقابلة
+  bool rated30; // الشركة قيّمته بعد 30 يوم
+  bool noShow; // المرشح بلّغ إن الشركة ما حضرت
   Req({
     required this.id,
     required this.wid,
@@ -246,13 +301,20 @@ class Req {
     this.place,
     this.inOk = false,
     this.warn = 0,
+    this.createdAt = 0,
+    this.stageAt = 0,
+    this.hiredAt,
+    this.rated = false,
+    this.rated30 = false,
+    this.noShow = false,
   })  : slots = slots ?? [],
         msgs = msgs ?? [];
   Json toJson() => {
         'id': id, 'wid': wid, 'company': company, 'spec': spec, 'hours': hours,
         'stage': stage, 'slots': slots, 'msgs': msgs.map((e) => e.toJson()).toList(),
         'videoAt': videoAt, 'videoDone': videoDone, 'inAt': inAt, 'place': place,
-        'inOk': inOk, 'warn': warn,
+        'inOk': inOk, 'warn': warn, 'createdAt': createdAt, 'stageAt': stageAt,
+        'hiredAt': hiredAt, 'rated': rated, 'rated30': rated30, 'noShow': noShow,
       };
   factory Req.fromJson(Json j) => Req(
         id: j['id'], wid: j['wid'], company: j['company'], spec: j['spec'],
@@ -260,6 +322,9 @@ class Req {
         msgs: _list(j['msgs'], Msg.fromJson), videoAt: _int(j['videoAt']),
         videoDone: j['videoDone'] == true, inAt: _int(j['inAt']), place: j['place'],
         inOk: j['inOk'] == true, warn: _int(j['warn']) ?? 0,
+        createdAt: _int(j['createdAt']) ?? 0, stageAt: _int(j['stageAt']) ?? 0,
+        hiredAt: _int(j['hiredAt']), rated: j['rated'] == true, rated30: j['rated30'] == true,
+        noShow: j['noShow'] == true,
       );
 }
 
@@ -280,6 +345,7 @@ class Post {
   List<Comment> comments;
   int reports;
   bool hidden;
+  int reportedAt;
   Post({
     required this.id,
     required this.wid,
@@ -288,15 +354,18 @@ class Post {
     List<Comment>? comments,
     this.reports = 0,
     this.hidden = false,
+    this.reportedAt = 0,
   }) : comments = comments ?? [];
   Json toJson() => {
         'id': id, 'wid': wid, 'text': text, 't': t,
         'comments': comments.map((e) => e.toJson()).toList(), 'reports': reports, 'hidden': hidden,
+        'reportedAt': reportedAt,
       };
   factory Post.fromJson(Json j) => Post(
         id: j['id'], wid: j['wid'], text: j['text'], t: _int(j['t']) ?? 0,
         comments: _list(j['comments'], Comment.fromJson),
         reports: _int(j['reports']) ?? 0, hidden: j['hidden'] == true,
+        reportedAt: _int(j['reportedAt']) ?? 0,
       );
 }
 
@@ -305,10 +374,13 @@ class Account {
   String pass; // بصمة كلمة المرور. بالسيرفر الحقيقي: bcrypt
   String role; // worker | company | hr
   String? ref;
-  Account({required this.phone, required this.pass, required this.role, this.ref});
-  Json toJson() => {'phone': phone, 'pass': pass, 'role': role, 'ref': ref};
-  factory Account.fromJson(Json j) =>
-      Account(phone: j['phone'], pass: j['pass'], role: j['role'], ref: j['ref']);
+  String hrRole; // للموارد البشرية: admin | reviewer | support
+  String hrName;
+  Account({required this.phone, required this.pass, required this.role, this.ref, this.hrRole = '', this.hrName = ''});
+  Json toJson() => {'phone': phone, 'pass': pass, 'role': role, 'ref': ref, 'hrRole': hrRole, 'hrName': hrName};
+  factory Account.fromJson(Json j) => Account(
+      phone: j['phone'], pass: j['pass'], role: j['role'], ref: j['ref'],
+      hrRole: j['hrRole'] ?? '', hrName: j['hrName'] ?? '');
 }
 
 class LogEntry {
@@ -323,17 +395,52 @@ class NewArea {
   String gov;
   String qadha;
   String area;
-  NewArea(this.gov, this.qadha, this.area);
-  Json toJson() => {'gov': gov, 'qadha': qadha, 'area': area};
-  factory NewArea.fromJson(Json j) => NewArea(j['gov'], j['qadha'], j['area'] ?? '');
+  int t;
+  NewArea(this.gov, this.qadha, this.area, [this.t = 0]);
+  Json toJson() => {'gov': gov, 'qadha': qadha, 'area': area, 't': t};
+  factory NewArea.fromJson(Json j) => NewArea(j['gov'], j['qadha'], j['area'] ?? '', _int(j['t']) ?? 0);
 }
 
 class OtherSpec {
   String name;
   String sector;
-  OtherSpec(this.name, this.sector);
-  Json toJson() => {'name': name, 'sector': sector};
-  factory OtherSpec.fromJson(Json j) => OtherSpec(j['name'], j['sector']);
+  int t;
+  OtherSpec(this.name, this.sector, [this.t = 0]);
+  Json toJson() => {'name': name, 'sector': sector, 't': t};
+  factory OtherSpec.fromJson(Json j) => OtherSpec(j['name'], j['sector'], _int(j['t']) ?? 0);
+}
+
+/// إشعار يوصل لصاحب الحساب (بالسيرفر: إشعار تلفون حقيقي)
+class Notif {
+  String to; // رقم الحساب
+  String text;
+  int t;
+  bool read;
+  String? reqId; // يفتح المقابلة إذا موجود
+  Notif({required this.to, required this.text, required this.t, this.read = false, this.reqId});
+  Json toJson() => {'to': to, 'text': text, 't': t, 'read': read, 'reqId': reqId};
+  factory Notif.fromJson(Json j) => Notif(
+      to: j['to'], text: j['text'] ?? '', t: _int(j['t']) ?? 0, read: j['read'] == true, reqId: j['reqId']);
+}
+
+/// رسالة دعم «كلّم شخص»: الموارد البشرية ترد خلال 24 ساعة
+class Ticket {
+  String id;
+  String phone;
+  String who; // اسم المرسل للعرض
+  String text;
+  int t;
+  String reply;
+  int? replyT;
+  String replyBy;
+  Ticket({required this.id, required this.phone, required this.who, required this.text, required this.t,
+      this.reply = '', this.replyT, this.replyBy = ''});
+  bool get open => replyT == null;
+  Json toJson() => {'id': id, 'phone': phone, 'who': who, 'text': text, 't': t,
+        'reply': reply, 'replyT': replyT, 'replyBy': replyBy};
+  factory Ticket.fromJson(Json j) => Ticket(
+      id: j['id'], phone: j['phone'], who: j['who'] ?? '', text: j['text'] ?? '', t: _int(j['t']) ?? 0,
+      reply: j['reply'] ?? '', replyT: _int(j['replyT']), replyBy: j['replyBy'] ?? '');
 }
 
 /// شروط بحث الشركة

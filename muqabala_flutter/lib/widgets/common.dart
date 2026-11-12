@@ -5,10 +5,13 @@ import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:pdfrx/pdfrx.dart';
 
+import '../data/characters.dart';
 import '../data/models.dart';
 import '../data/store.dart';
 
@@ -67,6 +70,129 @@ PillKind docKind(String s) =>
 String docLabel(String s) =>
     s == 'verified' ? '✅ موثّقة' : s == 'rejected' ? 'مرفوضة' : '⏳ قيد المراجعة';
 
+/// انتقال ناعم بين الشاشات: تلاشي ويه انزلاق خفيف
+class SoftTransitions extends PageTransitionsBuilder {
+  const SoftTransitions();
+  @override
+  Widget buildTransitions<T>(PageRoute<T> route, BuildContext context, Animation<double> animation,
+      Animation<double> secondaryAnimation, Widget child) {
+    final a = CurvedAnimation(parent: animation, curve: Curves.easeOutCubic, reverseCurve: Curves.easeInCubic);
+    return FadeTransition(
+      opacity: a,
+      child: SlideTransition(
+        position: Tween(begin: const Offset(0, .04), end: Offset.zero).animate(a),
+        child: child,
+      ),
+    );
+  }
+}
+
+/// العنصر يظهر بتلاشي وصعود بسيط أول ما ينرسم
+class FadeIn extends StatelessWidget {
+  final Widget child;
+  final int ms;
+  const FadeIn({super.key, required this.child, this.ms = 380});
+  @override
+  Widget build(BuildContext context) => TweenAnimationBuilder<double>(
+        tween: Tween(begin: 0, end: 1),
+        duration: Duration(milliseconds: ms),
+        curve: Curves.easeOutCubic,
+        builder: (_, v, c) => Opacity(
+          opacity: v,
+          child: Transform.translate(offset: Offset(0, 14 * (1 - v)), child: c),
+        ),
+        child: child,
+      );
+}
+
+/// يصغر شوية وقت الضغط حتى يحس المستخدم إن الزر استجاب
+class Press extends StatefulWidget {
+  final Widget child;
+  final VoidCallback? onTap;
+  const Press({super.key, required this.child, this.onTap});
+  @override
+  State<Press> createState() => _PressState();
+}
+
+class _PressState extends State<Press> {
+  bool _down = false;
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+        onTapDown: widget.onTap == null ? null : (_) => setState(() => _down = true),
+        onTapCancel: () => setState(() => _down = false),
+        onTapUp: (_) => setState(() => _down = false),
+        onTap: widget.onTap == null
+            ? null
+            : () {
+                HapticFeedback.selectionClick();
+                widget.onTap!();
+              },
+        child: AnimatedScale(
+          scale: _down ? .97 : 1,
+          duration: const Duration(milliseconds: 110),
+          child: widget.child,
+        ),
+      );
+}
+
+void openPage(BuildContext context, Widget page) =>
+    Navigator.push(context, MaterialPageRoute(builder: (_) => page));
+
+/// صورة المساعد (غنى أو يمان) بدائرة
+class AssistantFace extends StatelessWidget {
+  final String who;
+  final double size;
+  const AssistantFace(this.who, {super.key, this.size = 48});
+  @override
+  Widget build(BuildContext context) => Container(
+        width: size,
+        height: size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(color: Colors.white, width: 2),
+          boxShadow: const [BoxShadow(color: Color(0x33000000), blurRadius: 6, offset: Offset(0, 2))],
+        ),
+        child: ClipOval(child: SvgPicture.string(assistantSvg(who), fit: BoxFit.cover)),
+      );
+}
+
+/// نجوم التقييم للعرض
+class Stars extends StatelessWidget {
+  final double value;
+  final double size;
+  const Stars(this.value, {super.key, this.size = 16});
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        for (var i = 1; i <= 5; i++)
+          Icon(value >= i ? Icons.star_rounded : value >= i - .5 ? Icons.star_half_rounded : Icons.star_outline_rounded,
+              color: C.amber, size: size),
+      ]);
+}
+
+/// اختيار عدد النجوم
+class StarPicker extends StatelessWidget {
+  final int value;
+  final ValueChanged<int> onChanged;
+  const StarPicker({super.key, required this.value, required this.onChanged});
+  @override
+  Widget build(BuildContext context) => Row(mainAxisSize: MainAxisSize.min, children: [
+        for (var i = 1; i <= 5; i++)
+          IconButton(
+            visualDensity: VisualDensity.compact,
+            onPressed: () {
+              HapticFeedback.selectionClick();
+              onChanged(i);
+            },
+            icon: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              transitionBuilder: (c, a) => ScaleTransition(scale: a, child: c),
+              child: Icon(value >= i ? Icons.star_rounded : Icons.star_outline_rounded,
+                  key: ValueKey(value >= i), color: C.amber, size: 34),
+            ),
+          ),
+      ]);
+}
+
 /// بطاقة بيضاء بإطار
 class Box extends StatelessWidget {
   final List<Widget> children;
@@ -74,7 +200,7 @@ class Box extends StatelessWidget {
   final Color? color;
   const Box({super.key, required this.children, this.title, this.color});
   @override
-  Widget build(BuildContext context) => Container(
+  Widget build(BuildContext context) => FadeIn(child: Container(
         width: double.infinity,
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.all(16),
@@ -82,6 +208,7 @@ class Box extends StatelessWidget {
           color: color ?? Colors.white,
           border: Border.all(color: C.line),
           borderRadius: BorderRadius.circular(14),
+          boxShadow: const [BoxShadow(color: Color(0x0A000000), blurRadius: 10, offset: Offset(0, 3))],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           if (title != null)
@@ -91,7 +218,7 @@ class Box extends StatelessWidget {
             ),
           ...children,
         ]),
-      );
+      ));
 }
 
 /// عنصر داخل بطاقة
@@ -208,9 +335,11 @@ List<Widget> badges(Worker w) => [
 
 Widget coBadge(String name) {
   final c = app.companyByName(name);
-  return (c?.verified ?? false)
+  final b = (c?.verified ?? false)
       ? const Pill('✅ شركة موثّقة', kind: PillKind.ok)
       : const Pill('⏳ قيد التوثيق', kind: PillKind.warn);
+  if ((c?.noShows ?? 0) == 0) return b;
+  return Wrap(children: [b, Pill('⚠️ ما حضرت ${c!.noShows} مقابلة · التزام ${app.coScore(name).toStringAsFixed(1)}/5', kind: PillKind.bad)]);
 }
 
 Widget stageChip(Req r) {
@@ -221,6 +350,7 @@ Widget stageChip(Req r) {
     'hired' => const Pill('✅ تم التوظيف', kind: PillKind.ok),
     'rejected' => const Pill('غير مناسب', kind: PillKind.bad),
     'declined' => const Pill('اعتذر', kind: PillKind.bad),
+    'expired' => const Pill('⌛ انتهى بدون رد', kind: PillKind.bad),
     _ => const Pill('⏳ بانتظار رد المرشح'),
   };
 }
@@ -243,22 +373,44 @@ String fmtDateTime(int t) {
 final _picker = ImagePicker();
 
 /// صورة حية من الكاميرا الأمامية (مو من الاستوديو)
+/// رسالة خطأ واضحة بالعراقي بدل «حدث خطأ»
+String lastError = '';
+const kCamError = 'ما گدرنا نفتح الكاميرا. افتح إعدادات التلفون ← التطبيقات ← مقابلة ← الأذونات، واسمح بالكاميرا.';
+const kFileError = 'ما گدرنا نفتح الملف. تأكد إنه صورة أو PDF، وجرّب تختاره مرة ثانية.';
+
 Future<String?> takeSelfie() async {
-  final x = await _picker.pickImage(
-    source: ImageSource.camera,
-    preferredCameraDevice: CameraDevice.front,
-    maxWidth: 400,
-    imageQuality: 70,
-  );
-  if (x == null) return null;
-  return base64Encode(await x.readAsBytes());
+  try {
+    final x = await _picker.pickImage(
+      source: ImageSource.camera,
+      preferredCameraDevice: CameraDevice.front,
+      maxWidth: 400,
+      imageQuality: 70,
+    );
+    if (x == null) return null;
+    return base64Encode(await x.readAsBytes());
+  } catch (_) {
+    lastError = kCamError;
+    return null;
+  }
 }
 
 /// صورة الملف الشخصي من الاستوديو
 Future<String?> pickPhoto() async {
-  final x = await _picker.pickImage(source: ImageSource.gallery, maxWidth: 320, imageQuality: 75);
-  if (x == null) return null;
-  return base64Encode(await x.readAsBytes());
+  try {
+    final x = await _picker.pickImage(source: ImageSource.gallery, maxWidth: 320, imageQuality: 75);
+    if (x == null) return null;
+    return base64Encode(await x.readAsBytes());
+  } catch (_) {
+    lastError = 'ما گدرنا نفتح الصور. اسمح للتطبيق يوصل للصور من إعدادات التلفون.';
+    return null;
+  }
+}
+
+/// يعرض آخر خطأ صار (إذا موجود) ويصفّره
+void showLastError(BuildContext context) {
+  if (lastError.isEmpty) return;
+  toast(context, '⚠️ $lastError');
+  lastError = '';
 }
 
 /// يحفظ نسخة من الملف داخل مجلد التطبيق، ويرجع مكانها
@@ -273,23 +425,34 @@ Future<String> saveDocBytes(Uint8List bytes, String name) async {
 
 /// صورة مستمسك بالكاميرا الخلفية. يرجع (اسم الملف، مكانه)
 Future<(String, String)?> shootDocument() async {
-  final x = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 85);
-  if (x == null) return null;
-  return (x.name, await saveDocBytes(await x.readAsBytes(), x.name));
+  try {
+    final x = await _picker.pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 85);
+    if (x == null) return null;
+    return (x.name, await saveDocBytes(await x.readAsBytes(), x.name));
+  } catch (_) {
+    lastError = kCamError;
+    return null;
+  }
 }
 
 /// مستند (صورة أو PDF) بحد أقصى 5 ميغا. يرجع (اسم الملف، مكانه، رسالة خطأ)
 Future<(String?, String?, String?)> pickDocument() async {
-  final files = await FilePicker.pickFiles(
-    type: FileType.custom,
-    allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
-  );
-  if (files.isEmpty) return (null, null, null);
-  final f = files.first;
-  final size = await f.length() ?? 0;
-  if (size > 5 * 1024 * 1024) return (null, null, '⚠️ الملف أكبر من 5 ميغا');
-  final bytes = await f.readAsBytes();
-  return (f.name, await saveDocBytes(bytes, f.name), null);
+  try {
+    final files = await FilePicker.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: const ['jpg', 'jpeg', 'png', 'pdf'],
+    );
+    if (files.isEmpty) return (null, null, null);
+    final f = files.first;
+    final size = await f.length() ?? 0;
+    if (size > 5 * 1024 * 1024) {
+      return (null, null, '⚠️ الملف حجمه ${(size / 1048576).toStringAsFixed(1)} ميغا، والحد 5 ميغا. صوّره بدقة أقل أو اضغط الـPDF وجرّب مرة ثانية.');
+    }
+    final bytes = await f.readAsBytes();
+    return (f.name, await saveDocBytes(bytes, f.name), null);
+  } catch (_) {
+    return (null, null, '⚠️ $kFileError');
+  }
 }
 
 /// يفتح المستند: الصورة بتكبير وتصغير، والـPDF بعارض داخل التطبيق
@@ -386,16 +549,22 @@ class WideButton extends StatelessWidget {
   final bool secondary;
   final bool danger;
   const WideButton(this.text, {super.key, this.onTap, this.secondary = false, this.danger = false});
+  VoidCallback? get _tap => onTap == null
+      ? null
+      : () {
+          HapticFeedback.lightImpact();
+          onTap!();
+        };
   @override
   Widget build(BuildContext context) => Padding(
         padding: const EdgeInsets.only(top: 8),
         child: SizedBox(
           width: double.infinity,
           child: secondary
-              ? OutlinedButton(onPressed: onTap, child: Text(text))
+              ? OutlinedButton(onPressed: _tap, child: Text(text))
               : FilledButton(
                   style: danger ? FilledButton.styleFrom(backgroundColor: C.badBg, foregroundColor: C.bad) : null,
-                  onPressed: onTap,
+                  onPressed: _tap,
                   child: Text(text),
                 ),
         ),

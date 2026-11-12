@@ -333,7 +333,8 @@ class AppState extends ChangeNotifier {
             .hasMatch(t);
   }
 
-  List<double>? coord(Worker w) => geo[w.gov]?[w.qadha]?[w.area];
+  List<double>? coord(Worker w) => _point(w.gov, w.qadha, w.area);
+  List<double>? _point(String g, String q, String a) => geo[g]?[q]?[a];
 
   double dist(List<double>? a, List<double>? b) {
     if (a == null || b == null) return 9999;
@@ -617,7 +618,7 @@ class AppState extends ChangeNotifier {
   }
 
   List<SearchHit> search(SearchQuery j) {
-    final here = j.area.isNotEmpty ? geo[j.gov]?[j.qadha]?[j.area] : null;
+    final List<double>? here = j.area.isEmpty ? null : _point(j.gov, j.qadha, j.area);
     final minY = kExp.firstWhere((e) => e.$1 == j.exp, orElse: () => kExp.first).$3;
     final kws = j.kw.trim().split(RegExp(r'\s+')).where((x) => x.isNotEmpty).toList();
     final out = <SearchHit>[];
@@ -646,7 +647,7 @@ class AppState extends ChangeNotifier {
     // الترتيب: الدرجة المعتمدة أولاً، وبعدها النشاط والتوثيق والتحديث والقرب
     int key(SearchHit r) =>
         (r.s.status == 'reviewed' ? (r.s.finalScore ?? 0) : 0) +
-        math.min(r.w.points ~/ 50, 5) +
+        math.min<int>(r.w.points ~/ 50, 5) +
         (r.w.union?.status == 'verified' ? 3 : 0) -
         (stale(r.w) ? 5 : 0);
     out.sort((a, b) {

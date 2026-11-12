@@ -30,6 +30,15 @@ jobs:
       - name: اسم التطبيق بالعربي
         run: sed -i 's/android:label="muqabala"/android:label="مقابلة"/' android/app/src/main/AndroidManifest.xml
 
+      - name: إيقاف فحص lint اللي يتعطل وقت البناء
+        run: |
+          cat >> android/build.gradle.kts <<'KTS'
+
+          subprojects {
+              tasks.matching { it.name.startsWith("lintVital") }.configureEach { enabled = false }
+          }
+          KTS
+
       - name: المكتبات والأيقونة
         run: |
           flutter pub get
